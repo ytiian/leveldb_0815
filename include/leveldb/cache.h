@@ -29,7 +29,7 @@ class LEVELDB_EXPORT Cache;
 
 // Create a new cache with a fixed size capacity.  This implementation
 // of Cache uses a least-recently-used eviction policy.
-LEVELDB_EXPORT Cache* NewLRUCache(size_t capacity);
+LEVELDB_EXPORT Cache* NewLRUCache(uint64_t capacity);
 
 class LEVELDB_EXPORT Cache {
  public:
@@ -54,7 +54,7 @@ class LEVELDB_EXPORT Cache {
   //
   // When the inserted entry is no longer needed, the key and
   // value will be passed to "deleter".
-  virtual Handle* Insert(const Slice& key, void* value, size_t charge,
+  virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
                          void (*deleter)(const Slice& key, void* value)) = 0;
 
   // If the cache has no mapping for "key", returns nullptr.
@@ -95,7 +95,7 @@ class LEVELDB_EXPORT Cache {
 
   // Return an estimate of the combined charges of all elements stored in the
   // cache.
-  virtual size_t TotalCharge() const = 0;
+  virtual uint64_t TotalCharge() const = 0;
 };
 
 }  // namespace leveldb

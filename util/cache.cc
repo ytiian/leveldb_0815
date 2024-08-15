@@ -46,7 +46,7 @@ struct LRUHandle {
   LRUHandle* next_hash;
   LRUHandle* next;
   LRUHandle* prev;
-  size_t charge;  // TODO(opt): Only allow uint32_t?
+  uint64_t charge;  // TODO(opt): Only allow uint32_t?
   size_t key_length;
   bool in_cache;     // Whether entry is in the cache.
   uint32_t refs;     // References, including cache reference, if present.
@@ -154,17 +154,17 @@ class LRUCache {
   ~LRUCache();
 
   // Separate from constructor so caller can easily make an array of LRUCache
-  void SetCapacity(size_t capacity) { capacity_ = capacity; }
+  void SetCapacity(uint64_t capacity) { capacity_ = capacity; }
 
   // Like Cache methods, but with an extra "hash" parameter.
   Cache::Handle* Insert(const Slice& key, uint32_t hash, void* value,
-                        size_t charge,
+                        uint64_t charge,
                         void (*deleter)(const Slice& key, void* value));
   Cache::Handle* Lookup(const Slice& key, uint32_t hash);
   void Release(Cache::Handle* handle);
   void Erase(const Slice& key, uint32_t hash);
   void Prune();
-  size_t TotalCharge() const {
+  uint64_t TotalCharge() const {
     MutexLock l(&mutex_);
     return usage_;
   }
@@ -177,11 +177,11 @@ class LRUCache {
   bool FinishErase(LRUHandle* e) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Initialized before use.
-  size_t capacity_;
+  uint64_t capacity_;
 
   // mutex_ protects the following state.
   mutable port::Mutex mutex_;
-  size_t usage_ GUARDED_BY(mutex_);
+  uint64_t usage_ GUARDED_BY(mutex_);
 
   // Dummy head of LRU list.
   // lru.prev is newest entry, lru.next is oldest entry.
@@ -265,7 +265,7 @@ void LRUCache::Release(Cache::Handle* handle) {
 }
 
 Cache::Handle* LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
-                                size_t charge,
+                                uint64_t charge,
                                 void (*deleter)(const Slice& key,
                                                 void* value)) {
   MutexLock l(&mutex_);
@@ -349,14 +349,14 @@ class ShardedLRUCache : public Cache {
   static uint32_t Shard(uint32_t hash) { return hash >> (32 - kNumShardBits); }
 
  public:
-  explicit ShardedLRUCache(size_t capacity) : last_id_(0) {
-    const size_t per_shard = (capacity + (kNumShards - 1)) / kNumShards;
+  explicit ShardedLRUCache(uint64_t capacity) : last_id_(0) {
+    const uint64_t per_shard = (capacity + (kNumShards - 1)) / kNumShards;
     for (int s = 0; s < kNumShards; s++) {
       shard_[s].SetCapacity(per_shard);
     }
   }
   ~ShardedLRUCache() override {}
-  Handle* Insert(const Slice& key, void* value, size_t charge,
+  Handle* Insert(const Slice& key, void* value, uint64_t charge,
                  void (*deleter)(const Slice& key, void* value)) override {
     const uint32_t hash = HashSlice(key);
     return shard_[Shard(hash)].Insert(key, hash, value, charge, deleter);
@@ -385,8 +385,8 @@ class ShardedLRUCache : public Cache {
       shard_[s].Prune();
     }
   }
-  size_t TotalCharge() const override {
-    size_t total = 0;
+  uint64_t TotalCharge() const override {
+    uint64_t total = 0;
     for (int s = 0; s < kNumShards; s++) {
       total += shard_[s].TotalCharge();
     }
@@ -396,6 +396,6 @@ class ShardedLRUCache : public Cache {
 
 }  // end anonymous namespace
 
-Cache* NewLRUCache(size_t capacity) { return new ShardedLRUCache(capacity); }
+Cache* NewLRUCache(uint64_t capacity) { return new ShardedLRUCache(capacity); }
 
 }  // namespace leveldb

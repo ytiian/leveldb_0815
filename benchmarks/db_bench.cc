@@ -100,7 +100,7 @@ static int FLAGS_block_size = 0;
 
 // Number of bytes to use as a cache of uncompressed data.
 // Negative means use default settings.
-static int FLAGS_cache_size = -1;
+static uint64_t FLAGS_cache_size = -1;
 
 // Maximum number of files to keep open at the same time (use default if == 0)
 static int FLAGS_open_files = 0;
@@ -455,6 +455,7 @@ class Benchmark {
         stdout, "FileSize:   %.1f MB (estimated)\n",
         (((kKeySize + FLAGS_value_size * FLAGS_compression_ratio) * num_) /
          1048576.0));
+    std::fprintf(stdout, "Block Cache Size: %.1ld MB\n", FLAGS_cache_size / 1024 / 1024);
     PrintWarnings();
     std::fprintf(stdout, "------------------------------------------------\n");
   }
@@ -1073,6 +1074,7 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; i++) {
     double d;
     int n;
+    uint64_t long_n;
     char junk;
     if (leveldb::Slice(argv[i]).starts_with("--benchmarks=")) {
       FLAGS_benchmarks = argv[i] + strlen("--benchmarks=");
@@ -1109,9 +1111,9 @@ int main(int argc, char** argv) {
       FLAGS_block_size = n;
     } else if (sscanf(argv[i], "--key_prefix=%d%c", &n, &junk) == 1) {
       FLAGS_key_prefix = n;
-    } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
-      FLAGS_cache_size = n;
-    } else if (sscanf(argv[i], "--bloom_bits=%d%c", &n, &junk) == 1) {
+    } else if (sscanf(argv[i], "--cache_size=%lu%c", &long_n, &junk) == 1) {
+      FLAGS_cache_size = long_n;
+    }  else if (sscanf(argv[i], "--bloom_bits=%d%c", &n, &junk) == 1) {
       FLAGS_bloom_bits = n;
     } else if (sscanf(argv[i], "--open_files=%d%c", &n, &junk) == 1) {
       FLAGS_open_files = n;
