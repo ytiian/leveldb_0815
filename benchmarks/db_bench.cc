@@ -131,10 +131,116 @@ static int FLAGS_zstd_compression_level = 1;
 
 static bool FLAGS_cache_monitor = false;
 
+static int FLAGS_report_interval_seconds = 0;//"If greater than zero, it will write simple stats in CSV format to --report_file every N seconds");
+
+static const char* FLAGS_report_file = "/home/zytian/leveldb_0815/report.csv";
+
 namespace leveldb {
 
 namespace {
 leveldb::Env* g_env = nullptr;
+
+// A class that reports stats to CSV file.
+class ReporterAgent {
+ public:
+  ReporterAgent(Env* env, const std::string& fname,
+                uint64_t report_interval_secs)
+      : env_(env),
+        total_ops_done_(0),
+        last_report_(0),
+        report_interval_secs_(report_interval_secs),
+        stop_(false) {
+    auto s = env_->NewWritableFile(fname, &report_file_);
+    if (s.ok()) {
+      s = report_file_->Append(Header() + "\n");
+    }
+    if (s.ok()) {
+      s = report_file_->Flush();
+    }
+    if (!s.ok()) {
+      fprintf(stderr, "Can't open %s: %s\n", fname.c_str(),
+              s.ToString().c_str());
+      abort();
+    }
+
+    reporting_thread_ = std::thread([&]() { SleepAndReport(); });
+  }
+
+  ~ReporterAgent() {
+    {
+      std::unique_lock<std::mutex> lk(mutex_);
+      stop_ = true;
+      stop_cv_.notify_all();
+    }
+    reporting_thread_.join();
+  }
+
+  // thread safe
+  void ReportFinishedOps(int64_t num_ops) {
+    total_ops_done_.fetch_add(num_ops);
+  }
+
+
+ private:
+  std::string Header() const { return "secs_elapsed,interval_qps"; }
+
+  uint64_t NowMicros() {
+      auto now = std::chrono::system_clock::now();
+      auto epoch = now.time_since_epoch();
+      auto micros = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
+      return micros;
+  }
+
+  void SleepAndReport() {
+    auto time_started = NowMicros();
+    while (true) {
+      {
+        std::unique_lock<std::mutex> lk(mutex_);
+        if (stop_ ||
+            stop_cv_.wait_for(lk, std::chrono::seconds(report_interval_secs_),
+                              [&]() { return stop_; })) {
+          // stopping
+          break;
+        }
+        // else -> timeout, which means time for a report!
+      }
+      auto total_ops_done_snapshot = total_ops_done_.load();
+      // round the seconds elapsed
+      auto secs_elapsed = 
+          (NowMicros() - time_started + kMicrosInSecond / 2) /
+          kMicrosInSecond;
+      if(secs_elapsed == 1){
+        std::cout << "report timestamp: " << std::time(nullptr) << std::endl;
+      }
+      std::string report =
+          std::to_string(secs_elapsed) + "," +
+          std::to_string(total_ops_done_snapshot - last_report_) + "\n";
+      auto s = report_file_->Append(report);
+      if (s.ok()) {
+        s = report_file_->Flush();
+      }
+      if (!s.ok()) {
+        fprintf(stderr,
+                "Can't write to report file (%s), stopping the reporting\n",
+                s.ToString().c_str());
+        break;
+      }
+      last_report_ = total_ops_done_snapshot;
+    }
+  }
+
+  Env* env_;
+  WritableFile* report_file_;
+  std::atomic<int64_t> total_ops_done_;
+  int64_t last_report_;
+  const uint64_t report_interval_secs_;
+  std::thread reporting_thread_;
+  std::mutex mutex_;
+  // will notify on stop
+  std::condition_variable stop_cv_;
+  bool stop_;
+  uint64_t kMicrosInSecond = 1000000;
+};
 
 class CountComparator : public Comparator {
  public:
@@ -248,9 +354,14 @@ class Stats {
   double last_op_finish_;
   Histogram hist_;
   std::string message_;
+  ReporterAgent* reporter_agent_;  // does not own
 
  public:
   Stats() { Start(); }
+
+  void SetReporterAgent(ReporterAgent* reporter_agent) {
+    reporter_agent_ = reporter_agent;
+  }
 
   void Start() {
     next_report_ = 100;
@@ -282,6 +393,9 @@ class Stats {
   void AddMessage(Slice msg) { AppendWithSpace(&message_, msg); }
 
   void FinishedSingleOp() {
+    if (reporter_agent_) {
+      reporter_agent_->ReportFinishedOps(1); //to do
+    }
     if (FLAGS_histogram) {
       double now = g_env->NowMicros();
       double micros = now - last_op_finish_;
@@ -714,6 +828,12 @@ class Benchmark {
                     void (Benchmark::*method)(ThreadState*)) {
     SharedState shared(n);
 
+    std::unique_ptr<ReporterAgent> reporter_agent;
+    if (FLAGS_report_interval_seconds > 0) {
+      reporter_agent.reset(new ReporterAgent(g_env, FLAGS_report_file,
+                                             FLAGS_report_interval_seconds));
+    }
+
     ThreadArg* arg = new ThreadArg[n];
     for (int i = 0; i < n; i++) {
       arg[i].bm = this;
@@ -724,6 +844,7 @@ class Benchmark {
       // creation across all benchmarks. This ensures that the seeds are unique
       // but reproducible when rerunning the same set of benchmarks.
       arg[i].thread = new ThreadState(i, /*seed=*/1000 + total_thread_count_);
+      arg[i].thread->stats.SetReporterAgent(reporter_agent.get());
       arg[i].thread->shared = &shared;
       g_env->StartThread(ThreadBody, &arg[i]);
     }
@@ -1124,6 +1245,10 @@ int main(int argc, char** argv) {
       FLAGS_cache_monitor = n;
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
+    } else if (sscanf(argv[i], "--report_interval_seconds=%d%c", &n, &junk) == 1){
+      FLAGS_report_interval_seconds = n;
+    } else if (strncmp(argv[i], "--report_file=", 14) == 0){
+      FLAGS_report_file = argv[i] + 14;
     } else {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);
