@@ -63,9 +63,18 @@ std::string InfoLogFileName(const std::string& dbname) {
   return dbname + "/LOG";
 }
 
+std::string CompactionLogFileName(const std::string& dbname) {
+  return dbname + "/LOG_compaction";
+}
+
 // Return the name of the old info log file for "dbname".
 std::string OldInfoLogFileName(const std::string& dbname) {
   return dbname + "/LOG.old";
+}
+
+// Return the name of the old info log file for "dbname".
+std::string OldCompactionLogFileName(const std::string& dbname) {
+  return dbname + "/LOG_compaction.old";
 }
 
 // Owned filenames have the form:

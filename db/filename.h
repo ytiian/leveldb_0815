@@ -64,8 +64,12 @@ std::string TempFileName(const std::string& dbname, uint64_t number);
 // Return the name of the info log file for "dbname".
 std::string InfoLogFileName(const std::string& dbname);
 
+std::string CompactionLogFileName(const std::string& dbname);
+
 // Return the name of the old info log file for "dbname".
 std::string OldInfoLogFileName(const std::string& dbname);
+
+std::string OldCompactionLogFileName(const std::string& dbname);
 
 // If filename is a leveldb file, store the type of the file in *type.
 // The number encoded in the filename is stored in *number.  If the

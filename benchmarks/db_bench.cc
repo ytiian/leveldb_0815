@@ -62,7 +62,8 @@ static const char* FLAGS_benchmarks =
     "snappycomp,"
     "snappyuncomp,"
     "zstdcomp,"
-    "zstduncomp,";
+    "zstduncomp,"
+    "readwhilewriting,";
 
 // Number of key/values to place in database
 static int FLAGS_num = 1000000;

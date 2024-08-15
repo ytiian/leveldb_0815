@@ -161,6 +161,7 @@ class DBImpl : public DB {
   const InternalFilterPolicy internal_filter_policy_;
   const Options options_;  // options_.comparator == &internal_comparator_
   const bool owns_info_log_;
+  const bool owns_compaction_log_;
   const bool owns_cache_;
   const std::string dbname_;
 

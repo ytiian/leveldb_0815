@@ -112,6 +112,16 @@ Options SanitizeOptions(const std::string& dbname,
       result.info_log = nullptr;
     }
   }
+  if (result.compaction_log == nullptr) {
+    // Open a log file in the same directory as the db
+    src.env->CreateDir(dbname);  // In case it does not exist
+    src.env->RenameFile(CompactionLogFileName(dbname), OldCompactionLogFileName(dbname));
+    Status s = src.env->NewLogger(CompactionLogFileName(dbname), &result.compaction_log);
+    if (!s.ok()) {
+      // No place suitable for logging
+      result.compaction_log = nullptr;
+    }
+  }
   if (result.block_cache == nullptr) {
     result.block_cache = NewLRUCache(8 << 20);
   }
@@ -130,6 +140,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       options_(SanitizeOptions(dbname, &internal_comparator_,
                                &internal_filter_policy_, raw_options)),
       owns_info_log_(options_.info_log != raw_options.info_log),
+      owns_compaction_log_(options_.compaction_log != raw_options.compaction_log),
       owns_cache_(options_.block_cache != raw_options.block_cache),
       dbname_(dbname),
       table_cache_(new TableCache(dbname_, options_, TableCacheSize(options_))),
@@ -172,6 +183,9 @@ DBImpl::~DBImpl() {
 
   if (owns_info_log_) {
     delete options_.info_log;
+  }
+  if (owns_compaction_log_) {
+    delete options_.compaction_log;
   }
   if (owns_cache_) {
     delete options_.block_cache;
@@ -726,6 +740,10 @@ void DBImpl::BackgroundCompaction() {
     c = versions_->PickCompaction();
   }
 
+  if(c != nullptr){
+    Log(options_.compaction_log, "compaction begin: %ld, from level-%d to level-%d \n",
+    std::time(nullptr), c->level(), c->level() + 1);
+  }
   Status status;
   if (c == nullptr) {
     // Nothing to do
@@ -755,6 +773,8 @@ void DBImpl::BackgroundCompaction() {
     c->ReleaseInputs();
     RemoveObsoleteFiles();
   }
+  Log(options_.compaction_log, "compaction end: %ld, from level-%d to level-%d \n",
+    std::time(nullptr), c->level(), c->level() + 1);
   delete c;
 
   if (status.ok()) {
