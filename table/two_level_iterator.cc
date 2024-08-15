@@ -4,6 +4,7 @@
 
 #include "table/two_level_iterator.h"
 
+#include "leveldb/caller_type.h"
 #include "leveldb/table.h"
 #include "table/block.h"
 #include "table/format.h"
@@ -13,7 +14,7 @@ namespace leveldb {
 
 namespace {
 
-typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&);
+typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const CallerType&);
 
 class TwoLevelIterator : public Iterator {
  public:
@@ -153,7 +154,7 @@ void TwoLevelIterator::InitDataBlock() {
       // data_iter_ is already constructed with this iterator, so
       // no need to change anything
     } else {
-      Iterator* iter = (*block_function_)(arg_, options_, handle);
+      Iterator* iter = (*block_function_)(arg_, options_, handle, CallerType::kCallerTypeUnknown);
       data_block_handle_.assign(handle.data(), handle.size());
       SetDataIterator(iter);
     }

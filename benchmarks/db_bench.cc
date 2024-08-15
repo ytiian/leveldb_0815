@@ -129,6 +129,8 @@ static const char* FLAGS_db = nullptr;
 // ZSTD compression level to try out
 static int FLAGS_zstd_compression_level = 1;
 
+static bool FLAGS_cache_monitor = false;
+
 namespace leveldb {
 
 namespace {
@@ -520,7 +522,7 @@ class Benchmark {
 
  public:
   Benchmark()
-      : cache_(FLAGS_cache_size >= 0 ? NewLRUCache(FLAGS_cache_size) : nullptr),
+      : cache_(FLAGS_cache_size >= 0 ? NewLRUCache(FLAGS_cache_size, FLAGS_cache_monitor) : nullptr),
         filter_policy_(FLAGS_bloom_bits >= 0
                            ? NewBloomFilterPolicy(FLAGS_bloom_bits)
                            : nullptr),
@@ -1117,6 +1119,9 @@ int main(int argc, char** argv) {
       FLAGS_bloom_bits = n;
     } else if (sscanf(argv[i], "--open_files=%d%c", &n, &junk) == 1) {
       FLAGS_open_files = n;
+    } else if (sscanf(argv[i], "--cache_monitor=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_cache_monitor = n;
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else {

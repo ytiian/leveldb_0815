@@ -15,7 +15,7 @@
 
 namespace leveldb {
 
-Cache::~Cache() {}
+//Cache::~Cache() {}
 
 namespace {
 
@@ -349,7 +349,7 @@ class ShardedLRUCache : public Cache {
   static uint32_t Shard(uint32_t hash) { return hash >> (32 - kNumShardBits); }
 
  public:
-  explicit ShardedLRUCache(uint64_t capacity) : last_id_(0) {
+  explicit ShardedLRUCache(uint64_t capacity, bool is_monitor = false) : last_id_(0), Cache(is_monitor) {
     const uint64_t per_shard = (capacity + (kNumShards - 1)) / kNumShards;
     for (int s = 0; s < kNumShards; s++) {
       shard_[s].SetCapacity(per_shard);
@@ -396,6 +396,6 @@ class ShardedLRUCache : public Cache {
 
 }  // end anonymous namespace
 
-Cache* NewLRUCache(uint64_t capacity) { return new ShardedLRUCache(capacity); }
+Cache* NewLRUCache(uint64_t capacity, bool is_monitor) { return new ShardedLRUCache(capacity, is_monitor); }
 
 }  // namespace leveldb

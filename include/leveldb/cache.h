@@ -19,9 +19,16 @@
 #define STORAGE_LEVELDB_INCLUDE_CACHE_H_
 
 #include <cstdint>
+#include "caller_type.h"
 
 #include "leveldb/export.h"
 #include "leveldb/slice.h"
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 namespace leveldb {
 
@@ -29,18 +36,31 @@ class LEVELDB_EXPORT Cache;
 
 // Create a new cache with a fixed size capacity.  This implementation
 // of Cache uses a least-recently-used eviction policy.
-LEVELDB_EXPORT Cache* NewLRUCache(uint64_t capacity);
+LEVELDB_EXPORT Cache* NewLRUCache(uint64_t capacity, bool is_monitor = false);
 
 class LEVELDB_EXPORT Cache {
  public:
-  Cache() = default;
+  Cache(bool is_monitor) : is_monitor_(is_monitor), cache_misses_(0), cache_insert_(0), stop_thread_(false) {
+    if (is_monitor_) {
+      StartCacheHitRateCalculator();
+      std::cout << "Cache Hit Rate Calculator Started" << std::endl;
+    }
+  }
 
   Cache(const Cache&) = delete;
   Cache& operator=(const Cache&) = delete;
 
   // Destroys all existing entries by calling the "deleter"
   // function that was passed to the constructor.
-  virtual ~Cache();
+  virtual ~Cache(){
+    if(is_monitor_){
+      stop_thread_.store(true);
+      cv_.notify_all();
+      if (hit_rate_thread_.joinable()) {
+        hit_rate_thread_.join();
+      }
+    }
+  }
 
   // Opaque handle to an entry stored in the cache.
   struct Handle {};
@@ -96,6 +116,70 @@ class LEVELDB_EXPORT Cache {
   // Return an estimate of the combined charges of all elements stored in the
   // cache.
   virtual uint64_t TotalCharge() const = 0;
+
+  void IncrementCacheHits(CallerType caller) {
+    if( is_monitor_ && caller == CallerType::kGet){
+      cache_hits_.fetch_add(1, std::memory_order_relaxed);
+    } 
+  }
+
+  // µÝÔöcache_misses_
+  void IncrementCacheMisses(CallerType caller) {
+    if( is_monitor_ && caller == CallerType::kGet){
+      cache_misses_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  void IncrementCacheInsert(CallerType caller) {
+    if( is_monitor_ && caller == CallerType::kGet){
+      cache_insert_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+ private:
+  bool is_monitor_;
+  std::atomic<uint64_t> cache_hits_;
+  std::atomic<uint64_t> cache_misses_;
+  std::atomic<uint64_t> cache_insert_;
+  std::thread hit_rate_thread_;
+  std::mutex mtx_;
+  std::condition_variable cv_;
+  std::atomic<bool> stop_thread_;
+
+  void CalculateCacheHitRatePerSecond() {
+    uint64_t previous_hits = 0;
+    uint64_t previous_misses = 0;
+
+    while (!stop_thread_) {
+      std::unique_lock<std::mutex> lock(mtx_);
+      cv_.wait_for(lock, std::chrono::seconds(1), [this]() { return stop_thread_.load(); });
+      if (stop_thread_) break;
+
+      uint64_t current_hits = cache_hits_.load(std::memory_order_relaxed);
+      uint64_t current_misses = cache_misses_.load(std::memory_order_relaxed);
+      uint64_t current_insert = cache_insert_.load(std::memory_order_relaxed);
+      uint64_t hits = current_hits - previous_hits;
+      uint64_t misses = current_misses - previous_misses;
+      uint64_t total = hits + misses;
+
+      double hit_rate = total > 0 ? static_cast<double>(hits) / total : 0.0;
+
+      std::time_t nowTime = std::time(nullptr);
+
+      std::cout << nowTime << "; Cache Hit Rate (Only Get): " << hit_rate * 100 
+      << "%; total_access: " << current_hits + current_misses 
+      <<"; total_insert: "<< current_insert 
+      << "; total_miss:" << current_misses << std::endl;
+
+      previous_hits = current_hits;
+      previous_misses = current_misses;
+    }
+  }
+
+  void StartCacheHitRateCalculator() {
+    hit_rate_thread_ = std::thread([this]() { CalculateCacheHitRatePerSecond(); });
+  }
+
 };
 
 }  // namespace leveldb

@@ -9,6 +9,7 @@
 
 #include "leveldb/export.h"
 #include "leveldb/iterator.h"
+#include "leveldb/caller_type.h"
 
 namespace leveldb {
 
@@ -62,7 +63,7 @@ class LEVELDB_EXPORT Table {
   friend class TableCache;
   struct Rep;
 
-  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&);
+  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
   explicit Table(Rep* rep) : rep_(rep) {}
 

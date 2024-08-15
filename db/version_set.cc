@@ -208,7 +208,7 @@ class Version::LevelFileNumIterator : public Iterator {
 };
 
 static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
-                                 const Slice& file_value) {
+                                 const Slice& file_value, const CallerType& caller = CallerType::kCallerTypeUnknown) {
   TableCache* cache = reinterpret_cast<TableCache*>(arg);
   if (file_value.size() != 16) {
     return NewErrorIterator(
@@ -400,7 +400,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 }
 
 bool Version::UpdateStats(const GetStats& stats) {
-  FileMetaData* f = stats.seek_file;
+/*FileMetaData* f = stats.seek_file;
   if (f != nullptr) {
     f->allowed_seeks--;
     if (f->allowed_seeks <= 0 && file_to_compact_ == nullptr) {
@@ -408,7 +408,7 @@ bool Version::UpdateStats(const GetStats& stats) {
       file_to_compact_level_ = stats.seek_file_level;
       return true;
     }
-  }
+  }*/
   return false;
 }
 
