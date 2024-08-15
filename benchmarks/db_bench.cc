@@ -136,6 +136,8 @@ static int FLAGS_report_interval_seconds = 0;//"If greater than zero, it will wr
 
 static const char* FLAGS_report_file = "/home/zytian/leveldb_0815/report.csv";
 
+static bool FLAGS_disable_auto_compaction = false;
+
 namespace leveldb {
 
 namespace {
@@ -941,6 +943,7 @@ class Benchmark {
     options.reuse_logs = FLAGS_reuse_logs;
     options.compression =
         FLAGS_compression ? kSnappyCompression : kNoCompression;
+    options.disable_auto_compactions = FLAGS_disable_auto_compaction;
     Status s = DB::Open(options, FLAGS_db, &db_);
     if (!s.ok()) {
       std::fprintf(stderr, "open error: %s\n", s.ToString().c_str());
@@ -1250,7 +1253,10 @@ int main(int argc, char** argv) {
       FLAGS_report_interval_seconds = n;
     } else if (strncmp(argv[i], "--report_file=", 14) == 0){
       FLAGS_report_file = argv[i] + 14;
-    } else {
+    } else if (sscanf(argv[i], "--disable_auto_compaction=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_disable_auto_compaction = n;
+    }else {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);
     }

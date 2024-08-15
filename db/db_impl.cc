@@ -709,7 +709,9 @@ void DBImpl::BackgroundCall() {
 
   // Previous compaction may have produced too many files in a level,
   // so reschedule another compaction if needed.
-  MaybeScheduleCompaction();
+  if(!options_.disable_auto_compactions){
+    MaybeScheduleCompaction();
+  }
   background_work_finished_signal_.SignalAll();
 }
 
@@ -1170,7 +1172,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     mutex_.Lock();
   }
 
-  if (have_stat_update && current->UpdateStats(stats)) {
+  if (have_stat_update && current->UpdateStats(stats) && !options_.disable_auto_compactions) {
     MaybeScheduleCompaction();
   }
   mem->Unref();
@@ -1193,7 +1195,7 @@ Iterator* DBImpl::NewIterator(const ReadOptions& options) {
 
 void DBImpl::RecordReadSample(Slice key) {
   MutexLock l(&mutex_);
-  if (versions_->current()->RecordReadSample(key)) {
+  if (versions_->current()->RecordReadSample(key) && !options_.disable_auto_compactions) {
     MaybeScheduleCompaction();
   }
 }
@@ -1412,7 +1414,9 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       mem_ = new MemTable(internal_comparator_);
       mem_->Ref();
       force = false;  // Do not force another compaction if have room
-      MaybeScheduleCompaction();
+      if(!options_.disable_auto_compactions){
+        MaybeScheduleCompaction();
+      }
     }
   }
   return s;
@@ -1545,7 +1549,9 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   }
   if (s.ok()) {
     impl->RemoveObsoleteFiles();
-    impl->MaybeScheduleCompaction();
+    if(!options.disable_auto_compactions){
+      impl->MaybeScheduleCompaction();
+    }
   }
   impl->mutex_.Unlock();
   if (s.ok()) {
