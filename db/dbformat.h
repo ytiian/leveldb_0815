@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <climits>
 
 #include "leveldb/comparator.h"
 #include "leveldb/db.h"

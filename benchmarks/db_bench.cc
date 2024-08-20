@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <inttypes.h>
 
 #include "leveldb/cache.h"
 #include "leveldb/comparator.h"
@@ -20,6 +21,7 @@
 #include "util/mutexlock.h"
 #include "util/random.h"
 #include "util/testutil.h"
+#include "util/zipf.h"
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -138,6 +140,16 @@ static const char* FLAGS_report_file = "/home/zytian/leveldb_0815/report.csv";
 
 static bool FLAGS_disable_auto_compaction = false;
 
+static int FLAGS_readwritepercent = 90;
+
+static bool FLAGS_zipfian_key_distribution = 0;
+
+static int FLAGS_zipfian_init_num = 1000000; //int max value = 2147483647
+
+static double FLAGS_zipfian_theta = 0.99;
+
+static struct zipf_gen_state zipf_state;
+
 namespace leveldb {
 
 namespace {
@@ -213,7 +225,7 @@ class ReporterAgent {
           (NowMicros() - time_started + kMicrosInSecond / 2) /
           kMicrosInSecond;
       if(secs_elapsed == 1){
-        std::cout << "report timestamp: " << std::time(nullptr) << std::endl;
+        std::cout << "bandwidth report timestamp: " << std::time(nullptr) << std::endl;
       }
       std::string report =
           std::to_string(secs_elapsed) + "," +
@@ -747,6 +759,8 @@ class Benchmark {
       } else if (name == Slice("readwhilewriting")) {
         num_threads++;  // Add extra thread for writing
         method = &Benchmark::ReadWhileWriting;
+      } else if (name == Slice("readrandomwriterandom")){
+        method = &Benchmark::ReadRandomWriteRandom;
       } else if (name == Slice("compact")) {
         method = &Benchmark::Compact;
       } else if (name == Slice("crc32c")) {
@@ -1025,8 +1039,14 @@ class Benchmark {
     int found = 0;
     KeyBuffer key;
     for (int i = 0; i < reads_; i++) {
-      const int k = thread->rand.Uniform(FLAGS_num);
-      key.Set(k);
+      if(FLAGS_zipfian_key_distribution){
+        const int v = mehcached_zipf_next(&zipf_state);
+        //std::cout << "zip key: " << v << std::endl;
+        key.Set(v);
+      } else{
+        const int k = thread->rand.Uniform(FLAGS_num);
+        key.Set(k);
+      }
       if (db_->Get(options, key.slice(), &value).ok()) {
         found++;
       }
@@ -1034,6 +1054,70 @@ class Benchmark {
     }
     char msg[100];
     std::snprintf(msg, sizeof(msg), "(%d of %d found)", found, num_);
+    thread->stats.AddMessage(msg);
+  }
+
+  void ReadRandomWriteRandom(ThreadState* thread) {
+    ReadOptions options;
+    RandomGenerator gen;
+    std::string value;
+    int64_t found = 0;
+    int get_weight = 0;
+    int put_weight = 0;
+    int64_t reads_done = 0;
+    int64_t writes_done = 0;
+    KeyBuffer key;
+    WriteBatch batch;
+    // the number of iterations is the larger of read_ or write_
+    while (writes_done + reads_done < FLAGS_num) {
+      if(FLAGS_zipfian_key_distribution){
+        const int v = mehcached_zipf_next(&zipf_state);
+        //std::cout << "zip key: " << v << std::endl;
+        key.Set(v);
+      }else{
+        const int k = thread->rand.Uniform(FLAGS_num);
+        //std::cout << "uniform key: " << k << std::endl;
+        key.Set(k);
+      }
+
+      if (get_weight == 0 && put_weight == 0) {
+        // one batch completed, reinitialize for next batch
+        get_weight = FLAGS_readwritepercent;
+        put_weight = 100 - get_weight;
+      }
+      if (get_weight > 0) {
+        // do all the gets first
+        Status s = db_->Get(options, key.slice(), &value);
+        if (!s.ok() && !s.IsNotFound()) {
+          fprintf(stderr, "get error: %s\n", s.ToString().c_str());
+          // we continue after error rather than exiting so that we can
+          // find more errors if any
+        } else if (!s.IsNotFound()) {
+          found++;
+        }
+        get_weight--;
+        reads_done++;
+        thread->stats.FinishedSingleOp();
+      } else if (put_weight > 0) {
+        // then do all the corresponding number of puts
+        // for all the gets we have done earlier
+        Status s;
+        batch.Clear();
+        batch.Put(key.slice(), gen.Generate(value_size_));
+        s = db_->Write(write_options_, &batch);
+        if (!s.ok()) {
+          fprintf(stderr, "put error: %s\n", s.ToString().c_str());
+        }
+        put_weight--;
+        writes_done++;
+        thread->stats.FinishedSingleOp();
+      }
+    }
+    char msg[100];
+    snprintf(msg, sizeof(msg),
+             "( reads:%" PRIu64 " writes:%" PRIu64 " total:%" PRIu64
+             " found:%" PRIu64 ")",
+             reads_done, writes_done, reads_done + writes_done, found);
     thread->stats.AddMessage(msg);
   }
 
@@ -1256,10 +1340,25 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--disable_auto_compaction=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_disable_auto_compaction = n;
-    }else {
+    } else if (sscanf(argv[i], "--readwritepercent=%d%c", &n, &junk) == 1){
+      FLAGS_readwritepercent = n;
+    } else if (sscanf(argv[i], "--zipfian_key_distribution=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_zipfian_key_distribution = n;
+    } else if (sscanf(argv[i], "--zipfian_init_num=%d%c", &n, &junk) == 1){
+      FLAGS_zipfian_init_num = n;
+    } else if (sscanf(argv[i], "--zipfian_theta=%lf%c", &d, &junk) == 1) {
+      FLAGS_zipfian_theta = d;
+    } else {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);
     }
+  }
+
+  if(FLAGS_zipfian_key_distribution){
+    const uint64_t n = FLAGS_zipfian_init_num;
+    const double theta = FLAGS_zipfian_theta;
+    mehcached_zipf_init(&zipf_state, n, theta, 0);
   }
 
   leveldb::g_env = leveldb::Env::Default();

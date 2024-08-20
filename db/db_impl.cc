@@ -682,7 +682,7 @@ void DBImpl::MaybeScheduleCompaction() {
   } else if (!bg_error_.ok()) {
     // Already got an error; no more changes
   } else if (imm_ == nullptr && manual_compaction_ == nullptr &&
-             !versions_->NeedsCompaction()) {
+             (!versions_->NeedsCompaction() || (versions_->NeedsCompaction() && options_.disable_auto_compactions))) {
     // No work to be done
   } else {
     background_compaction_scheduled_ = true;
@@ -709,9 +709,7 @@ void DBImpl::BackgroundCall() {
 
   // Previous compaction may have produced too many files in a level,
   // so reschedule another compaction if needed.
-  if(!options_.disable_auto_compactions){
-    MaybeScheduleCompaction();
-  }
+  MaybeScheduleCompaction();
   background_work_finished_signal_.SignalAll();
 }
 
@@ -739,7 +737,9 @@ void DBImpl::BackgroundCompaction() {
         (m->end ? m->end->DebugString().c_str() : "(end)"),
         (m->done ? "(end)" : manual_end.DebugString().c_str()));
   } else {
-    c = versions_->PickCompaction();
+    if(!options_.disable_auto_compactions){
+      c = versions_->PickCompaction();
+    }
   }
 
   if(c != nullptr){
@@ -1172,7 +1172,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     mutex_.Lock();
   }
 
-  if (have_stat_update && current->UpdateStats(stats) && !options_.disable_auto_compactions) {
+  if (have_stat_update && current->UpdateStats(stats)) {
     MaybeScheduleCompaction();
   }
   mem->Unref();
@@ -1195,7 +1195,7 @@ Iterator* DBImpl::NewIterator(const ReadOptions& options) {
 
 void DBImpl::RecordReadSample(Slice key) {
   MutexLock l(&mutex_);
-  if (versions_->current()->RecordReadSample(key) && !options_.disable_auto_compactions) {
+  if (versions_->current()->RecordReadSample(key)) {
     MaybeScheduleCompaction();
   }
 }
@@ -1354,8 +1354,8 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // Yield previous error
       s = bg_error_;
       break;
-    } else if (allow_delay && versions_->NumLevelFiles(0) >=
-                                  config::kL0_SlowdownWritesTrigger) {
+    } else if (allow_delay && (!options_.disable_auto_compactions && versions_->NumLevelFiles(0) >=
+                                  config::kL0_SlowdownWritesTrigger)) {
       // We are getting close to hitting a hard limit on the number of
       // L0 files.  Rather than delaying a single write by several
       // seconds when we hit the hard limit, start delaying each
@@ -1375,7 +1375,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // one is still being compacted, so we wait.
       Log(options_.info_log, "Current memtable full; waiting...\n");
       background_work_finished_signal_.Wait();
-    } else if (versions_->NumLevelFiles(0) >= config::kL0_StopWritesTrigger) {
+    } else if (!options_.disable_auto_compactions && versions_->NumLevelFiles(0) >= config::kL0_StopWritesTrigger) {
       // There are too many level-0 files.
       Log(options_.info_log, "Too many L0 files; waiting...\n");
       background_work_finished_signal_.Wait();
@@ -1414,9 +1414,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       mem_ = new MemTable(internal_comparator_);
       mem_->Ref();
       force = false;  // Do not force another compaction if have room
-      if(!options_.disable_auto_compactions){
-        MaybeScheduleCompaction();
-      }
+      MaybeScheduleCompaction();
     }
   }
   return s;
@@ -1549,9 +1547,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   }
   if (s.ok()) {
     impl->RemoveObsoleteFiles();
-    if(!options.disable_auto_compactions){
-      impl->MaybeScheduleCompaction();
-    }
+    impl->MaybeScheduleCompaction();
   }
   impl->mutex_.Unlock();
   if (s.ok()) {
