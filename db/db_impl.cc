@@ -22,6 +22,7 @@
 #include "db/table_cache.h"
 #include "db/version_set.h"
 #include "db/write_batch_internal.h"
+#include "db/L0_reminder.h"
 #include "leveldb/db.h"
 #include "leveldb/env.h"
 #include "leveldb/status.h"
@@ -144,6 +145,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       owns_cache_(options_.block_cache != raw_options.block_cache),
       dbname_(dbname),
       table_cache_(new TableCache(dbname_, options_, TableCacheSize(options_))),
+      l0_reminder_(new L0_Reminder()),
       db_lock_(nullptr),
       shutting_down_(false),
       background_work_finished_signal_(&mutex_),
@@ -339,6 +341,9 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   if (!s.ok()) {
     return s;
   }
+
+  s = versions_->RecoverL0Reminder(l0_reminder_);
+
   SequenceNumber max_sequence(0);
 
   // Recover from all newer log files than the ones named in the
@@ -530,7 +535,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
-    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
+    s = BuildL0Table(dbname_, env_, options_, table_cache_, l0_reminder_, iter, &meta);
     mutex_.Lock();
   }
 
@@ -547,7 +552,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     const Slice min_user_key = meta.smallest.user_key();
     const Slice max_user_key = meta.largest.user_key();
     if (base != nullptr) {
-      level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
+      //level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
     edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
                   meta.largest);
@@ -877,6 +882,15 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   delete compact->outfile;
   compact->outfile = nullptr;
 
+  if(compact->compaction->level() == 0){
+    {
+      std::unique_lock<std::mutex> lock(done_files_mutex_);
+      done_files_.push(output_number);
+      reminder_map_[output_number] = std::move(now_queue_);
+      now_queue_ = std::queue<L0ReminderEntry>();
+    }
+  }
+
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
     Iterator* iter =
@@ -934,6 +948,8 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   // Release mutex while we're actually doing the compaction work
   mutex_.Unlock();
 
+  stop_thread_ = false;
+  reminder_thread_ = std::thread(&DBImpl::ReminderRemoveThread, this);  
   input->SeekToFirst();
   Status status;
   ParsedInternalKey ikey;
@@ -994,6 +1010,18 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         //     few iterations of this loop (by rule (A) above).
         // Therefore this deletion marker is obsolete and can be dropped.
         drop = true;
+      } 
+
+      if(!drop){
+        Slice value = l0_reminder_->ReadFromReminder(ikey.user_key)->value();
+        uint64_t file_number;
+        if(GetVarint64(&value, &file_number)){
+          if(!compact->compaction->IfInInputFiles(file_number)){ //have new kv version
+            drop = true;
+          }
+        } else{
+          now_queue_.push(L0ReminderEntry(ikey.user_key, value));
+        }
       }
 
       last_sequence_for_key = ikey.sequence;
@@ -1030,6 +1058,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
           break;
         }
       }
+      //[todo]now_queue_.push();
     }
 
     input->Next();
@@ -1069,6 +1098,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   }
   VersionSet::LevelSummaryStorage tmp;
   Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
+  StopReminderRemoveThread();
   return status;
 }
 
@@ -1160,11 +1190,16 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
   {
     mutex_.Unlock();
     // First look in the memtable, then in the immutable memtable (if any).
-    LookupKey lkey(key, snapshot);
+    TableHandle* result = nullptr;
+    LookupKey lkey(key, snapshot); //this 'key' is user_key
     if (mem->Get(lkey, value, &s)) {
       // Done
     } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
       // Done
+    } else if ((result = l0_reminder_->ReadFromReminder(key)) != nullptr){
+      Slice reminder_result = result->value();
+      s = current->GetWithReminder(options, lkey, value, reminder_result);  
+      l0_reminder_->Release(result);
     } else {
       s = current->Get(options, lkey, value, &stats);
       have_stat_update = true;
@@ -1590,6 +1625,45 @@ Status DestroyDB(const std::string& dbname, const Options& options) {
     env->RemoveDir(dbname);  // Ignore error in case dir contains other files
   }
   return result;
+}
+
+void DBImpl::ReminderRemoveThread() {
+  uint64_t file_number;
+  while (true) {
+    {
+      std::unique_lock<std::mutex> lock(done_files_mutex_);
+      cv_.wait(lock, [&] { return !done_files_.empty() || stop_thread_; });
+      if (stop_thread_ && done_files_.empty()) break; 
+      if (!done_files_.empty()) {
+        file_number = done_files_.front();
+        done_files_.pop();
+      }
+    }
+    std::queue<L0ReminderEntry> entries;
+    {
+      std::unique_lock<std::mutex> lock(map_mutex_);
+      entries = std::move(reminder_map_[file_number]);
+      reminder_map_.erase(file_number);
+    }
+    while (!entries.empty()) {
+      L0ReminderEntry& entry = entries.front();
+      //[todo]write to reminder
+      entries.pop();
+    }
+  }
+}
+
+void DBImpl::StopReminderRemoveThread() {
+  {
+    std::unique_lock<std::mutex> lock(done_files_mutex_);
+    cv_.wait(lock, [&] { return done_files_.empty(); });
+  }
+  // 设置停止标志并通知线程退出
+  stop_thread_ = true;
+  cv_.notify_all();
+  if (reminder_thread_.joinable()) {
+    reminder_thread_.join();
+  }
 }
 
 }  // namespace leveldb

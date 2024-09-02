@@ -651,7 +651,7 @@ class Benchmark {
 
  public:
   Benchmark()
-      : cache_(FLAGS_cache_size >= 0 ? NewLRUCache(FLAGS_cache_size, FLAGS_cache_monitor) : nullptr),
+      : cache_(FLAGS_cache_size >= 0 ? NewSkipListLRUCache(FLAGS_cache_size, BytewiseComparator(), FLAGS_cache_monitor) : nullptr),
         filter_policy_(FLAGS_bloom_bits >= 0
                            ? NewBloomFilterPolicy(FLAGS_bloom_bits)
                            : nullptr),

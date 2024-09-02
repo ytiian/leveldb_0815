@@ -12,12 +12,14 @@
 #include "db/log_writer.h"
 #include "db/memtable.h"
 #include "db/table_cache.h"
+#include "db/L0_reminder.h"
 #include "leveldb/env.h"
 #include "leveldb/table_builder.h"
 #include "table/merger.h"
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
 #include "util/logging.h"
+#include "db/memory_structure.h"
 
 namespace leveldb {
 
@@ -279,46 +281,46 @@ static bool NewestFirst(FileMetaData* a, FileMetaData* b) {
 }
 
 void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
-                                 bool (*func)(void*, int, FileMetaData*)) {
+                                  bool (*ReadFromCache)(void*, int, bool*),
+                                 bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*)) {
+  //std::cout<<std::endl<<std::endl<<std::endl;
+  //std::cout<<internal_key.ToString()<<std::endl;
   const Comparator* ucmp = vset_->icmp_.user_comparator();
-
-  // Search level-0 in order from newest to oldest.
-  std::vector<FileMetaData*> tmp;
-  tmp.reserve(files_[0].size());
-  for (uint32_t i = 0; i < files_[0].size(); i++) {
-    FileMetaData* f = files_[0][i];
-    if (ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
-        ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
-      tmp.push_back(f);
+  for (int level = 1; level < config::kNumLevels; level++){
+    bool if_search = false;
+    if(!(*ReadFromCache)(arg, level, &if_search)){
+      return;
     }
-  }
-  if (!tmp.empty()) {
-    std::sort(tmp.begin(), tmp.end(), NewestFirst);
-    for (uint32_t i = 0; i < tmp.size(); i++) {
-      if (!(*func)(arg, 0, tmp[i])) {
-        return;
-      }
+    //std::cout<<if_search<<std::endl;
+    if(if_search){
+      continue;
     }
-  }
 
-  // Search other levels.
-  for (int level = 1; level < config::kNumLevels; level++) {
     size_t num_files = files_[level].size();
-    if (num_files == 0) continue;
-
     // Binary search to find earliest index whose largest key >= internal_key.
     uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);
+        
     if (index < num_files) {
       FileMetaData* f = files_[level][index];
       if (ucmp->Compare(user_key, f->smallest.user_key()) < 0) {
         // All of "f" is past any data for user_key
       } else {
-        if (!(*func)(arg, level, f)) {
+        if (!(*ReadUseIO)(arg, level, f, ucmp)) { //false means stop searching
           return;
         }
       }
     }
   }
+}
+Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, std::string* value, 
+        const Slice& reminder_result){
+  Saver saver;
+  saver.state = kNotFound;
+  saver.ucmp = vset_->icmp_.user_comparator();
+  saver.user_key = k.user_key();
+  saver.value = value;  
+  return L0Get(options, k.internal_key(), &saver, reminder_result, vset_->options_->block_cache, vset_->table_cache_, 
+   &(vset_->icmp_), files_, SaveValue);
 }
 
 Status Version::Get(const ReadOptions& options, const LookupKey& k,
@@ -338,7 +340,47 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
     Status s;
     bool found;
 
-    static bool Match(void* arg, int level, FileMetaData* f) {
+    static bool ReadFromCache(void* arg, int level, bool* if_search){
+      State* state = reinterpret_cast<State*>(arg);
+
+      if (state->stats->seek_file == nullptr &&
+          state->last_file_read != nullptr) {
+        // We have had more than one seek for this read.  Charge the 1st file.
+        state->stats->seek_file = state->last_file_read;
+        state->stats->seek_file_level = state->last_file_read_level;
+      }      
+
+      Cache* block_cache = state->vset->options_->block_cache;
+      const Comparator* cmp = state->vset->options_->comparator;
+
+      state->s = NotL0Get(level, state->ikey, &state->saver, block_cache, cmp, if_search, SaveValue);
+      
+      if (!state->s.ok()) {
+        state->found = true;
+        return false;
+      }
+      switch (state->saver.state) {
+        case kNotFound:
+          return true;  // Keep searching in other files
+        case kFound:
+          state->found = true;
+          return false;
+        case kDeleted:
+          return false;
+        case kCorrupt:
+          state->s =
+              Status::Corruption("corrupted key for ", state->saver.user_key);
+          state->found = true;
+          return false;
+      }
+
+      // Not reached. Added to avoid false compilation warnings of
+      // "control reaches end of non-void function".
+      return false;
+    
+    }
+
+    static bool Match(void* arg, int level, FileMetaData* f, const Comparator* ucmp) {
       State* state = reinterpret_cast<State*>(arg);
 
       if (state->stats->seek_file == nullptr &&
@@ -353,7 +395,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 
       state->s = state->vset->table_cache_->Get(*state->options, f->number,
                                                 f->file_size, state->ikey,
-                                                &state->saver, SaveValue);
+                                                &state->saver, level, ucmp, SaveValue);
       if (!state->s.ok()) {
         state->found = true;
         return false;
@@ -394,7 +436,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
   state.saver.user_key = k.user_key();
   state.saver.value = value;
 
-  ForEachOverlapping(state.saver.user_key, state.ikey, &state, &State::Match);
+  ForEachOverlapping(state.saver.user_key, state.ikey, &state, &State::ReadFromCache, &State::Match);
 
   return state.found ? state.s : Status::NotFound(Slice());
 }
@@ -413,7 +455,7 @@ bool Version::UpdateStats(const GetStats& stats) {
 }
 
 bool Version::RecordReadSample(Slice internal_key) {
-  ParsedInternalKey ikey;
+  /*ParsedInternalKey ikey;
   if (!ParseInternalKey(internal_key, &ikey)) {
     return false;
   }
@@ -447,7 +489,7 @@ bool Version::RecordReadSample(Slice internal_key) {
     // 1MB cost is about 1 seek (see comment in Builder::Apply).
     return UpdateStats(state.stats);
   }
-  return false;
+  return false;*/
 }
 
 void Version::Ref() { ++refs_; }
@@ -989,6 +1031,35 @@ Status VersionSet::Recover(bool* save_manifest) {
   }
 
   return s;
+}
+
+Status VersionSet::RecoverL0Reminder(L0_Reminder* l0_reminder){
+  if(current_->files_[0].size() == 0){
+    return Status::OK();
+  }
+
+  //[todo] ��L0���ļ���ʱ������
+  const std::vector<FileMetaData*>& files = current_->files_[0];
+  int size = files.size();
+  Iterator* l0file_iter;
+  for(int i = 0; i < size; i++){
+    l0file_iter = table_cache_->NewIterator(ReadOptions(), files[i]->number, files[i]->file_size);
+    TwoLevelIterator* two_level_iter = static_cast<TwoLevelIterator*>(l0file_iter);
+    two_level_iter->SeekToFirst();
+    Slice handle;
+    while(two_level_iter->Valid()){
+      uint64_t location;
+      Slice key = two_level_iter->keyAndHandle(&location);
+      char buf[16];
+      EncodeFixed64(buf, files[i]->number);
+      EncodeFixed64(buf + 8, location);
+      Slice value(buf, 16);
+      l0_reminder->WriteToReminder(key, value);
+      two_level_iter->Next();
+    }
+    delete two_level_iter;
+  }
+  return Status::OK();
 }
 
 bool VersionSet::ReuseManifest(const std::string& dscname,
@@ -1564,6 +1635,15 @@ void Compaction::ReleaseInputs() {
     input_version_->Unref();
     input_version_ = nullptr;
   }
+}
+
+bool Compaction::IfInInputFiles(uint64_t number){//only for L0
+  for(int i = 0; i < inputs_[0].size(); i++){
+    if(inputs_[0][i]->number == number){
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace leveldb

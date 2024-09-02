@@ -7,11 +7,77 @@
 
 #include "leveldb/iterator.h"
 #include "leveldb/caller_type.h"
+#include "leveldb/slice.h"
+#include "leveldb/options.h"
+#include "table/iterator_wrapper.h"
+#include "util/coding.h"
+#include <cstdint>
 
 namespace leveldb {
 
 struct ReadOptions;
 
+typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const CallerType&);
+
+class TwoLevelIterator : public Iterator {
+ public:
+  TwoLevelIterator(Iterator* index_iter, BlockFunction block_function,
+                   void* arg, const ReadOptions& options);
+
+  ~TwoLevelIterator() override;
+
+  void Seek(const Slice& target) override;
+  void SeekToFirst() override;
+  void SeekToLast() override;
+  void Next() override;
+  void Prev() override;
+
+  bool Valid() const override { return data_iter_.Valid(); }
+  Slice key() const override {
+    assert(Valid());
+    return data_iter_.key();
+  }
+  Slice value() const override {
+    assert(Valid());
+    return data_iter_.value();
+  }
+  Status status() const override {
+    // It'd be nice if status() returned a const Status& instead of a Status
+    if (!index_iter_.status().ok()) {
+      return index_iter_.status();
+    } else if (data_iter_.iter() != nullptr && !data_iter_.status().ok()) {
+      return data_iter_.status();
+    } else {
+      return status_;
+    }
+  }
+
+  Slice keyAndHandle(uint64_t* handle) {
+    assert(Valid());
+    Slice block_handle(data_block_handle_.data(), data_block_handle_.size());
+    GetVarint64(&block_handle, handle);
+    return key();
+  }
+
+ private:
+  void SaveError(const Status& s) {
+    if (status_.ok() && !s.ok()) status_ = s;
+  }
+  void SkipEmptyDataBlocksForward();
+  void SkipEmptyDataBlocksBackward();
+  void SetDataIterator(Iterator* data_iter);
+  void InitDataBlock();
+
+  BlockFunction block_function_;
+  void* arg_;
+  const ReadOptions options_;
+  Status status_;
+  IteratorWrapper index_iter_;
+  IteratorWrapper data_iter_;  // May be nullptr
+  // If data_iter_ is non-null, then "data_block_handle_" holds the
+  // "index_value" passed to block_function_ to create the data_iter_.
+  std::string data_block_handle_;
+};
 // Return a new two level iterator.  A two-level iterator contains an
 // index iterator whose values point to a sequence of blocks where
 // each block is itself a sequence of key,value pairs.  The returned

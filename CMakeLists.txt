@@ -151,6 +151,9 @@ target_sources(leveldb
     "db/version_set.h"
     "db/write_batch_internal.h"
     "db/write_batch.cc"
+    "db/L0_reminder.h"
+    "db/L0_reminder.cc"
+    "db/memory_structure.h"
     "port/port_stdcxx.h"
     "port/port.h"
     "port/thread_annotations.h"
@@ -191,6 +194,7 @@ target_sources(leveldb
     "util/random.h"
     "util/status.cc"
     "util/zipf.h"
+    "util/skiplist_cache.cc"
 
   # Only CMake 3.3+ supports PUBLIC sources in targets exported by "install".
   $<$<VERSION_GREATER:CMAKE_VERSION,3.2>:PUBLIC>

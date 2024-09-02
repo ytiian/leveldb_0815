@@ -14,6 +14,7 @@
 #include "table/format.h"
 #include "util/coding.h"
 #include "util/logging.h"
+#include <iostream>
 
 namespace leveldb {
 
@@ -278,6 +279,7 @@ class Block::Iter : public Iterator {
 };
 
 Iterator* Block::NewIterator(const Comparator* comparator) {
+  //std::cout<<"size_ :" << size_<<std::endl;
   if (size_ < sizeof(uint32_t)) {
     return NewErrorIterator(Status::Corruption("bad block contents"));
   }

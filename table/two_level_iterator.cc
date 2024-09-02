@@ -12,9 +12,9 @@
 
 namespace leveldb {
 
-namespace {
+//namespace {
 
-typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const CallerType&);
+/*typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const CallerType&);
 
 class TwoLevelIterator : public Iterator {
  public:
@@ -49,6 +49,12 @@ class TwoLevelIterator : public Iterator {
     }
   }
 
+  Slice keyAndHandle(Slice* handle) {
+    assert(Valid());
+    *handle = Slice(data_block_handle_);
+    return key();
+  }
+
  private:
   void SaveError(const Status& s) {
     if (status_.ok() && !s.ok()) status_ = s;
@@ -67,7 +73,7 @@ class TwoLevelIterator : public Iterator {
   // If data_iter_ is non-null, then "data_block_handle_" holds the
   // "index_value" passed to block_function_ to create the data_iter_.
   std::string data_block_handle_;
-};
+};*/
 
 TwoLevelIterator::TwoLevelIterator(Iterator* index_iter,
                                    BlockFunction block_function, void* arg,
@@ -161,7 +167,7 @@ void TwoLevelIterator::InitDataBlock() {
   }
 }
 
-}  // namespace
+//}  // namespace
 
 Iterator* NewTwoLevelIterator(Iterator* index_iter,
                               BlockFunction block_function, void* arg,

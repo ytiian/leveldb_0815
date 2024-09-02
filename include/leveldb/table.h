@@ -20,6 +20,7 @@ struct Options;
 class RandomAccessFile;
 struct ReadOptions;
 class TableCache;
+class Comparator;
 
 // A Table is a sorted map from strings to strings.  Tables are
 // immutable and persistent.  A Table may be safely accessed from
@@ -63,14 +64,29 @@ class LEVELDB_EXPORT Table {
   friend class TableCache;
   struct Rep;
 
-  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+  //static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+
+  static Iterator* BlockReaderWithoutCache(void*, const ReadOptions&, const Slice&, const int&, const Comparator*,
+          const Slice&,
+          const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+
+  static Iterator* BlockReaderWithoutCache(void*, const ReadOptions&, const Slice&,
+          const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
   explicit Table(Rep* rep) : rep_(rep) {}
 
   // Calls (*handle_result)(arg, ...) with the entry found after a call
   // to Seek(key).  May not make such a call if filter policy says
   // that key is not present.
-  Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
+  /*Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
+                     void (*handle_result)(void* arg, const Slice& k,
+                                           const Slice& v));*/
+
+  Status InternalGetByIO(const ReadOptions&, const Slice& key, void* arg, const int& level, const Comparator* ucmp,
+                     void (*handle_result)(void* arg, const Slice& k,
+                                           const Slice& v));
+
+  Status GetWithOffset(const ReadOptions&, const Slice& key, void* arg, const Slice& offset, const Slice& cache_key,
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
 

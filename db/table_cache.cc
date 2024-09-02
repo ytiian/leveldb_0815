@@ -98,14 +98,15 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
 }
 
 Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
-                       uint64_t file_size, const Slice& k, void* arg,
+                       uint64_t file_size, const Slice& k, void* arg, const int& level,
+                       const Comparator* ucmp,
                        void (*handle_result)(void*, const Slice&,
                                              const Slice&)) {
   Cache::Handle* handle = nullptr;
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-    s = t->InternalGet(options, k, arg, handle_result);
+    s = t->InternalGetByIO(options, k, arg, level, ucmp, handle_result);
     cache_->Release(handle);
   }
   return s;
@@ -115,6 +116,20 @@ void TableCache::Evict(uint64_t file_number) {
   char buf[sizeof(file_number)];
   EncodeFixed64(buf, file_number);
   cache_->Erase(Slice(buf, sizeof(buf)));
+}
+
+Status TableCache::L0Get(const ReadOptions& options, uint64_t file_number,
+                       uint64_t file_size, const Slice& k, void* arg, const Slice& offset, const Slice& cache_key,
+                       void (*handle_result)(void*, const Slice&,
+                                             const Slice&)){
+  Cache::Handle* handle = nullptr;
+  Status s = FindTable(file_number, file_size, &handle);
+  if (s.ok()) {
+    Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+    s = t->GetWithOffset(options, k, arg, offset, cache_key, handle_result);
+    cache_->Release(handle);
+  }
+  return s;
 }
 
 }  // namespace leveldb

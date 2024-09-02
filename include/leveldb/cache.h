@@ -23,6 +23,7 @@
 
 #include "leveldb/export.h"
 #include "leveldb/slice.h"
+#include "leveldb/comparator.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -37,6 +38,8 @@ class LEVELDB_EXPORT Cache;
 // Create a new cache with a fixed size capacity.  This implementation
 // of Cache uses a least-recently-used eviction policy.
 LEVELDB_EXPORT Cache* NewLRUCache(uint64_t capacity, bool is_monitor = false);
+
+LEVELDB_EXPORT Cache* NewSkipListLRUCache(uint64_t capacity, const Comparator* internal_cmp, bool is_monitor);
 
 class LEVELDB_EXPORT Cache {
  public:
@@ -77,6 +80,9 @@ class LEVELDB_EXPORT Cache {
   virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
                          void (*deleter)(const Slice& key, void* value)) = 0;
 
+  virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
+                         void (*deleter)(const Slice& key, void* value), const Slice& min_key) = 0;
+
   // If the cache has no mapping for "key", returns nullptr.
   //
   // Else return a handle that corresponds to the mapping.  The caller
@@ -116,6 +122,12 @@ class LEVELDB_EXPORT Cache {
   // Return an estimate of the combined charges of all elements stored in the
   // cache.
   virtual uint64_t TotalCharge() const = 0;
+
+  /*virtual Slice BlockMinKey(Handle* handle) const = 0;
+
+  virtual Slice BlockMaxKey(Handle* handle) const = 0;*/
+
+  virtual Slice Key(Handle* handle) const = 0;
 
   void IncrementCacheHits(CallerType caller) {
     if( is_monitor_ && caller == CallerType::kGet){

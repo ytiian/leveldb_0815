@@ -38,6 +38,7 @@ class TableCache;
 class Version;
 class VersionSet;
 class WritableFile;
+class L0_Reminder;
 
 // Return the smallest index i such that files[i]->largest >= key.
 // Return files.size() if there is no such file.
@@ -74,6 +75,9 @@ class Version {
   // REQUIRES: lock is not held
   Status Get(const ReadOptions&, const LookupKey& key, std::string* val,
              GetStats* stats);
+
+  Status GetWithReminder(const ReadOptions& options, const LookupKey& k, 
+            std::string* value, const Slice& reminder_result);
 
   // Adds "stats" into the current state.  Returns true if a new
   // compaction may need to be triggered, false otherwise.
@@ -143,7 +147,7 @@ class Version {
   //
   // REQUIRES: user portion of internal_key == user_key.
   void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
-                          bool (*func)(void*, int, FileMetaData*));
+                          bool (*ReadFromCache)(void*, int, bool*), bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*));
 
   VersionSet* vset_;  // VersionSet to which this Version belongs
   Version* next_;     // Next version in linked list
@@ -183,6 +187,8 @@ class VersionSet {
 
   // Recover the last saved descriptor from persistent storage.
   Status Recover(bool* save_manifest);
+
+  Status RecoverL0Reminder(L0_Reminder* L0_Reminder);
 
   // Return the current version.
   Version* current() const { return current_; }
@@ -356,6 +362,8 @@ class Compaction {
   // Release the input version for the compaction, once the compaction
   // is successful.
   void ReleaseInputs();
+
+  bool IfInInputFiles(const uint64_t file_number);
 
  private:
   friend class Version;
