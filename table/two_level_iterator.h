@@ -5,6 +5,8 @@
 #ifndef STORAGE_LEVELDB_TABLE_TWO_LEVEL_ITERATOR_H_
 #define STORAGE_LEVELDB_TABLE_TWO_LEVEL_ITERATOR_H_
 
+#include<iostream>
+
 #include "leveldb/iterator.h"
 #include "leveldb/caller_type.h"
 #include "leveldb/slice.h"
@@ -19,9 +21,21 @@ struct ReadOptions;
 
 typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const CallerType&);
 
+typedef Iterator* (*FileFunction)(void*, const ReadOptions&, const Slice&, const Slice&, const Slice&, const CallerType&);
+
+typedef Iterator* (*CacheFunction)(void*, const ReadOptions&, const Slice&,const Slice&, Iterator*, const Slice&, const int&);
+
 class TwoLevelIterator : public Iterator {
  public:
   TwoLevelIterator(Iterator* index_iter, BlockFunction block_function,
+                   void* arg, const ReadOptions& options);
+
+  TwoLevelIterator(Iterator* index_iter, FileFunction block_function,
+                   void* arg, const ReadOptions& options);
+
+  TwoLevelIterator(Iterator* index_iter, Iterator* cache_iter,
+                    const uint32_t& level,
+                   CacheFunction cache_function,
                    void* arg, const ReadOptions& options);
 
   ~TwoLevelIterator() override;
@@ -52,10 +66,15 @@ class TwoLevelIterator : public Iterator {
     }
   }
 
-  Slice keyAndHandle(uint64_t* handle) {
+  bool IfCache() override{
+    return data_iter_.IfCache();
+  }
+
+  Slice keyAndHandle(uint64_t* offset, uint64_t* size) {
     assert(Valid());
     Slice block_handle(data_block_handle_.data(), data_block_handle_.size());
-    GetVarint64(&block_handle, handle);
+    GetVarint64(&block_handle, offset);
+    GetVarint64(&block_handle , size);
     return key();
   }
 
@@ -69,14 +88,18 @@ class TwoLevelIterator : public Iterator {
   void InitDataBlock();
 
   BlockFunction block_function_;
+  FileFunction file_function_;
+  CacheFunction cache_function_;
   void* arg_;
   const ReadOptions options_;
   Status status_;
   IteratorWrapper index_iter_;
   IteratorWrapper data_iter_;  // May be nullptr
+  IteratorWrapper cache_iter_;
   // If data_iter_ is non-null, then "data_block_handle_" holds the
   // "index_value" passed to block_function_ to create the data_iter_.
   std::string data_block_handle_;
+  const uint32_t level_;
 };
 // Return a new two level iterator.  A two-level iterator contains an
 // index iterator whose values point to a sequence of blocks where
@@ -92,6 +115,22 @@ Iterator* NewTwoLevelIterator(
     Iterator* (*block_function)(void* arg, const ReadOptions& options,
                                 const Slice& index_value, const CallerType& caller_type),
     void* arg, const ReadOptions& options);
+
+Iterator* NewTwoLevelIterator(
+    Iterator* index_iter,
+    Iterator* (*file_function)(void* arg, const ReadOptions& options,
+                                const Slice& index_value, const Slice& left_bound,
+                                const Slice& right_bound, 
+                                const CallerType& caller_type),
+    void* arg, const ReadOptions& options);
+
+Iterator* NewTwoLevelIterator(
+    Iterator* index_iter, Iterator* cache_iter, const uint32_t& level,
+    Iterator* (*cache_function)(void* arg, const ReadOptions& options,
+        const Slice& index_key ,const Slice& index_value, Iterator* cache_iter, 
+        const Slice& right_bound, const int& level),
+    void* arg, const ReadOptions& options);
+
 
 }  // namespace leveldb
 

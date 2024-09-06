@@ -88,6 +88,8 @@ class Block::Iter : public Iterator {
   std::string key_;
   Slice value_;
   Status status_;
+  bool if_cache_;
+  const Slice right_bound_;
 
   inline int Compare(const Slice& a, const Slice& b) const {
     return comparator_->Compare(a, b);
@@ -115,13 +117,15 @@ class Block::Iter : public Iterator {
 
  public:
   Iter(const Comparator* comparator, const char* data, uint32_t restarts,
-       uint32_t num_restarts)
+       uint32_t num_restarts, bool if_cache, const Slice& right_bound)
       : comparator_(comparator),
         data_(data),
         restarts_(restarts),
         num_restarts_(num_restarts),
         current_(restarts_),
-        restart_index_(num_restarts_) {
+        restart_index_(num_restarts_),
+        if_cache_(if_cache),
+        right_bound_(right_bound) {
     assert(num_restarts_ > 0);
   }
 
@@ -239,6 +243,14 @@ class Block::Iter : public Iterator {
     }
   }
 
+  bool IfCache() override{
+    return if_cache_;
+  }
+
+  Slice right_bound() const override{
+    return right_bound_;
+  }
+
  private:
   void CorruptionError() {
     current_ = restarts_;
@@ -278,7 +290,7 @@ class Block::Iter : public Iterator {
   }
 };
 
-Iterator* Block::NewIterator(const Comparator* comparator) {
+Iterator* Block::NewIterator(const Comparator* comparator, bool if_cache, const Slice& right_bound) {
   //std::cout<<"size_ :" << size_<<std::endl;
   if (size_ < sizeof(uint32_t)) {
     return NewErrorIterator(Status::Corruption("bad block contents"));
@@ -287,7 +299,7 @@ Iterator* Block::NewIterator(const Comparator* comparator) {
   if (num_restarts == 0) {
     return NewEmptyIterator();
   } else {
-    return new Iter(comparator, data_, restart_offset_, num_restarts);
+    return new Iter(comparator, data_, restart_offset_, num_restarts, if_cache, right_bound);
   }
 }
 

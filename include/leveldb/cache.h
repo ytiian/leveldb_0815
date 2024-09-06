@@ -24,6 +24,7 @@
 #include "leveldb/export.h"
 #include "leveldb/slice.h"
 #include "leveldb/comparator.h"
+#include "leveldb/iterator.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -128,6 +129,10 @@ class LEVELDB_EXPORT Cache {
   virtual Slice BlockMaxKey(Handle* handle) const = 0;*/
 
   virtual Slice Key(Handle* handle) const = 0;
+
+  virtual Iterator* NewIterator(const Slice& left_bound) {
+    return nullptr;
+  }
 
   void IncrementCacheHits(CallerType caller) {
     if( is_monitor_ && caller == CallerType::kGet){

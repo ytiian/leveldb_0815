@@ -29,18 +29,12 @@ Status BuildL0Table(const std::string& dbname, Env* env, const Options& options,
       return s;
     }
 
-    std::queue<L0ReminderEntry> entries;
-    TableBuilder* builder = new TableBuilder(options, file);
+    TableBuilder* builder = new TableBuilder(options, file, 0, false, meta->number, l0_reminder);
     meta->smallest.DecodeFrom(iter->key());
     Slice key;
     for (; iter->Valid(); iter->Next()) {
       key = iter->key();
-      uint64_t location = builder->AddAndReturnLocation(key, iter->value());
-      char buf[16];
-      EncodeFixed64(buf, meta->number);
-      EncodeFixed64(buf + 8, location);
-      Slice value(buf, 16);
-      l0_reminder->WriteToReminder(key, value);
+      builder->Add(key, iter->value());
     }
     if (!key.empty()) {
       meta->largest.DecodeFrom(key);

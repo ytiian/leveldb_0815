@@ -26,7 +26,7 @@ class Block {
   ~Block();
 
   size_t size() const { return size_; }
-  Iterator* NewIterator(const Comparator* comparator);
+  Iterator* NewIterator(const Comparator* comparator, bool if_cache = false, const Slice& right_bound = Slice());
 
  private:
   class Iter;

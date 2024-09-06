@@ -18,6 +18,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <queue>
 
 #include "db/dbformat.h"
 #include "db/version_edit.h"
@@ -118,7 +119,14 @@ class Version {
   // Return a human readable string that describes this version's contents.
   std::string DebugString() const;
 
+  void AddFileToQueue(uint64_t file, uint64_t file_size,
+               const InternalKey& smallest, const InternalKey& largest);
+
  private:
+
+  std::mutex interState_files_mutex_;
+  std::queue<FileMetaData*> interState_files_; //L0-L1computation output file that has been downloaded but not yet applied
+
   friend class Compaction;
   friend class VersionSet;
 
@@ -364,6 +372,8 @@ class Compaction {
   void ReleaseInputs();
 
   bool IfInInputFiles(const uint64_t file_number);
+
+  Version* Get_version() { return input_version_; }
 
  private:
   friend class Version;

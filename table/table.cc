@@ -14,6 +14,7 @@
 #include "table/filter_block.h"
 #include "table/format.h"
 #include "table/two_level_iterator.h"
+#include "table/pass_cache_iterator.h"
 #include "util/coding.h"
 #include "leveldb/comparator.h"
 #include <iostream>
@@ -230,7 +231,13 @@ Iterator* Table::BlockReaderWithoutCache(void* arg, const ReadOptions& options,
           memcpy(cache_key_buffer + sizeof(uint32_t), max_key.data(), max_key.size());
           Slice cache_key(cache_key_buffer, sizeof(cache_key_buffer));
 
-          if(ucmp->Compare(Slice(min_key.data(), min_key.size() - 8), Slice(k.data(), k.size() - 8)) <= 0 
+          //[todo] test compaction, need to delete
+          /*if(ucmp == nullptr){
+            cache_handle = block_cache->Insert(cache_key, block, block->size(),
+                                    &DeleteCachedBlock, min_key);
+          }*/
+
+          if(ucmp != nullptr && ucmp->Compare(Slice(min_key.data(), min_key.size() - 8), Slice(k.data(), k.size() - 8)) <= 0 
               && ucmp->Compare(Slice(max_key.data(), max_key.size() - 8), Slice(k.data(), k.size() - 8)) >= 0){
             cache_handle = block_cache->Insert(cache_key, block, block->size(),
                                                 &DeleteCachedBlock, min_key);
@@ -313,6 +320,23 @@ Iterator* Table::NewIterator(const ReadOptions& options) const {
       &Table::BlockReaderWithoutCache, const_cast<Table*>(this), options);
 }
 
+Iterator* Table::NewIterator(const ReadOptions& options, 
+    const Slice& left_bound, const Slice& right_bound, const int& level) const {
+  Cache* block_cache = rep_->options.block_cache;
+  Iterator* cache_iter = block_cache->NewIterator(left_bound);
+  char cache_key_buffer[sizeof(uint32_t) + left_bound.size()];
+  EncodeFixed32(cache_key_buffer, level); 
+  memcpy(cache_key_buffer + sizeof(uint32_t), left_bound.data(), left_bound.size());  
+  Slice key(cache_key_buffer, sizeof(cache_key_buffer));
+  cache_iter->Seek(key);
+  //std::cout<<"cache_iter valid:"<<cache_iter->Valid()<<std::endl;
+  //std::cout<<"cache_iter sst bound:"<< left_bound.ToString() <<" " << right_bound.ToString() <<std::endl;
+  //[todo] Cleanup?
+  return NewTwoLevelIterator(
+      rep_->index_block->NewIterator(rep_->options.comparator, false, right_bound), cache_iter, level,
+       &Table::BlockReadFromStoreOrCache, const_cast<Table*>(this), options);
+}
+
 /*Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)) {
@@ -373,7 +397,7 @@ Status Table::InternalGetByIO(const ReadOptions& options, const Slice& k, void* 
   return s;
 }
 
-Status Table::GetWithOffset(const ReadOptions& options, const Slice& k, void* arg, const Slice& offset, const Slice& cache_key,
+Status Table::GetWithOffset(const ReadOptions& options, const Slice& k, void* arg, const Slice& block_handle, const Slice& cache_key,
                             void (*handle_result)(void*, const Slice&, const Slice&)) {
   //It must be the block from IO
   Status s;
@@ -381,14 +405,14 @@ Status Table::GetWithOffset(const ReadOptions& options, const Slice& k, void* ar
   Cache* block_cache = rep_->options.block_cache;
   Block* block = nullptr;
   BlockContents contents;
-  Slice input = offset;
+  Slice input = block_handle;
   Cache::Handle* cache_handle = nullptr;
   handle.DecodeFrom(&input);
   s = ReadBlock(rep_->file, options, handle, &contents);
   if (s.ok()) {
     block = new Block(contents);
     if (contents.cachable && options.fill_cache) {//contents.cachable && options.fill_cache
-      std::cout<<"insertL0"<<std::endl;
+      // std::cout<<"insertL0"<<std::endl;
       cache_handle = block_cache->Insert(cache_key, block, block->size(),
                                           &DeleteCachedBlock);
     }    
@@ -438,6 +462,37 @@ uint64_t Table::ApproximateOffsetOf(const Slice& key) const {
   }
   delete index_iter;
   return result;
+}
+
+Iterator* Table::BlockReadFromStoreOrCache(void* arg, const ReadOptions& options,
+        const Slice& index_key ,const Slice& index_value, Iterator* cache_iter, 
+        const Slice& right_bound, const int& level){
+  Table* table = reinterpret_cast<Table*>(arg);
+  Block* block = nullptr;
+  Cache::Handle* cache_handle = nullptr;
+  Cache* block_cache = table->rep_->options.block_cache;
+  const Comparator* cmp = table->rep_->options.comparator;
+
+          //std::cout << "level: " << level << std::endl;
+          //std::cout << "index_key and right boudn:" << index_key.ToString() << " " << right_bound.ToString() << std::endl;
+  Slice largest_key = (cmp->Compare(index_key, right_bound) < 0) ? index_key : right_bound;
+          //std::cout << "largest result:" << largest_key.ToString()<< std::endl;
+          //std::cout<<"cache_iter valid:"<<cache_iter->Valid()<<std::endl;
+  Iterator* iter;
+  if(cache_iter->Valid()){
+    cache_handle = reinterpret_cast<Cache::Handle*>(cache_iter->TestAndReturn(largest_key));
+  }
+  if(cache_handle != nullptr){
+    block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
+    iter = block->NewIterator(cmp, true);
+    iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
+    iter->SetIfCache();
+    cache_iter->Next();
+  } else{
+    //[todo] no need to insert
+    iter = table->BlockReaderWithoutCache(table, options, index_value, level, nullptr, Slice(), CallerType::kCompaction);
+  }
+  return iter;
 }
 
 }  // namespace leveldb

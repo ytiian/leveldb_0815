@@ -97,6 +97,23 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   return result;
 }
 
+Iterator* TableCache::NewIterator(const ReadOptions& options,
+                                  uint64_t file_number, uint64_t file_size, const Slice& left_bound,
+                                  const Slice& right_bound, const int& level) {
+
+  Cache::Handle* handle = nullptr;
+  Status s = FindTable(file_number, file_size, &handle);
+  if (!s.ok()) {
+    return NewErrorIterator(s);
+  }
+
+  Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+  Iterator* result = table->NewIterator(options, left_bound, right_bound, level);
+  result->RegisterCleanup(&UnrefEntry, cache_, handle);
+
+  return result;
+}
+
 Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
                        uint64_t file_size, const Slice& k, void* arg, const int& level,
                        const Comparator* ucmp,
@@ -119,14 +136,15 @@ void TableCache::Evict(uint64_t file_number) {
 }
 
 Status TableCache::L0Get(const ReadOptions& options, uint64_t file_number,
-                       uint64_t file_size, const Slice& k, void* arg, const Slice& offset, const Slice& cache_key,
+                       uint64_t file_size, const Slice& k, void* arg, const Slice& block_handle, const Slice& cache_key,
                        void (*handle_result)(void*, const Slice&,
                                              const Slice&)){
   Cache::Handle* handle = nullptr;
+  //std::cout<<"L0Get"<<file_number<<std::endl;
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-    s = t->GetWithOffset(options, k, arg, offset, cache_key, handle_result);
+    s = t->GetWithOffset(options, k, arg, block_handle, cache_key, handle_result);
     cache_->Release(handle);
   }
   return s;

@@ -38,6 +38,7 @@ Status NotL0Get(int level, const Slice& k, void* arg, Cache* block_cache, const 
     
     cache_handle = block_cache->Lookup(key); // return LRUHandle*
     if (cache_handle != nullptr) {
+      //std::cout<<"Lookup1"<<std::endl;
       block = reinterpret_cast<Block*>(block_cache->Value(cache_handle)); //Value(cache_handle) : return reinterpret_cast<LRUHandle*>(handle)->value; (void*)
     }
   } 
@@ -68,37 +69,49 @@ Status L0Get(const ReadOptions& options, const Slice& k, void* arg, const Slice&
   Status s;
   if (block_cache != nullptr) {
     size_t handle_len = reminder_result.size();
-    char cache_key_buffer[sizeof(size_t) + handle_len];
-    EncodeFixed32(cache_key_buffer, 0); 
-    memcpy(cache_key_buffer + sizeof(uint32_t), reminder_result.data(), handle_len);
-    Slice key(cache_key_buffer, sizeof(cache_key_buffer));
-    
+    Slice input = reminder_result;
+    uint64_t number, offset, size;
+    GetVarint64(&input, &number);
+    GetVarint64(&input, &offset);
+    GetVarint64(&input, &size);
+    std::string cache_key;
+    PutFixed32(&cache_key, 0);
+    PutFixed64(&cache_key, number);
+    PutFixed64(&cache_key, offset);
+    PutFixed64(&cache_key, size);
+    Slice key(cache_key);
+
     bool io_flag = true; //need to io:1
     cache_handle = block_cache->Lookup(key); 
     if (cache_handle != nullptr) {  //Lookup has already performed an equality check internally
+      //std::cout<<"Lookup2"<<std::endl;
       block = reinterpret_cast<Block*>(block_cache->Value(cache_handle)); //Value(cache_handle) : return reinterpret_cast<LRUHandle*>(handle)->value; (void*)
       io_flag = false;
       
       Iterator* iter;
       if (block != nullptr) {
+        //std::cout<<"L0 cache match"<<std::endl;
         iter = block->NewIterator(cmp);
         iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
       } else {
         iter = NewErrorIterator(s);
+        block_cache->Release(cache_handle);
       }
       iter->Seek(k);
       if (iter->Valid()) {
         (*handle_result)(arg, iter->key(), iter->value()); 
       }
       s = iter->status();
+      delete iter;
     }
     if(io_flag){
-      uint64_t number = DecodeFixed64(reminder_result.data());
-      Slice offset(reminder_result.data() + 8, reminder_result.size() - 8);
+      Slice input = reminder_result;
+      uint64_t number ;
+      GetVarint64(&input, &number);
       for(uint32_t i = 0; i < files[0].size(); i++){
         FileMetaData* f = files[0][i];
         if(f->number == number){
-          s = table_cache->L0Get(options, number, f->file_size, k, arg, offset, key, handle_result);      
+          s = table_cache->L0Get(options, number, f->file_size, k, arg, input, key, handle_result);      
         }
       }
     }

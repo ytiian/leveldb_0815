@@ -74,6 +74,21 @@ class IteratorWrapper {
     Update();
   }
 
+  bool IfCache(){
+    assert(iter_);
+    return iter_->IfCache();
+  }
+
+  Slice left_bound() const{
+    assert(iter_);
+    return iter_->left_bound();
+  }
+
+  Slice right_bound() const{
+    assert(iter_);
+    return iter_->right_bound();
+  }
+
  private:
   void Update() {
     valid_ = iter_->Valid();

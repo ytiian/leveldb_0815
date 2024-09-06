@@ -128,7 +128,7 @@ class L0_Reminder_HashTable {
 class L0_Reminder{
 public:
   L0_Reminder(){};
-  void WriteToReminder(const Slice& user_key, const Slice& value);
+  void WriteToReminder(const Slice& ikey, const Slice& value);
   //void RemoveFromReminder();
   TableHandle* ReadFromReminder(const Slice& user_key); //返回这个key所在的位置
   void Release(TableHandle* handle);

@@ -52,6 +52,9 @@ class LEVELDB_EXPORT Table {
   // call one of the Seek methods on the iterator before using it).
   Iterator* NewIterator(const ReadOptions&) const;
 
+  Iterator* NewIterator(const ReadOptions&, const Slice& left_bound,
+                        const Slice& right_bound, const int& level) const;
+
   // Given a key, return an approximate byte offset in the file where
   // the data for that key begins (or would begin if the key were
   // present in the file).  The returned value is in terms of file
@@ -72,6 +75,9 @@ class LEVELDB_EXPORT Table {
 
   static Iterator* BlockReaderWithoutCache(void*, const ReadOptions&, const Slice&,
           const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+
+  static Iterator* BlockReadFromStoreOrCache(void*, const ReadOptions&,
+        const Slice&,const Slice&, Iterator*, const Slice&, const int&);
 
   explicit Table(Rep* rep) : rep_(rep) {}
 

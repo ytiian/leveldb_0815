@@ -173,6 +173,8 @@ target_sources(leveldb
     "table/table.cc"
     "table/two_level_iterator.cc"
     "table/two_level_iterator.h"
+    "table/pass_cache_iterator.h"
+    "table/pass_cache_iterator.cc"
     "util/arena.cc"
     "util/arena.h"
     "util/bloom.cc"

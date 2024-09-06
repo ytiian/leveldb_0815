@@ -4,6 +4,7 @@
 
 #include "leveldb/cache.h"
 #include "leveldb/comparator.h"
+#include "leveldb/iterator.h"
 
 #include <cassert>
 #include <cstdio>
@@ -26,7 +27,7 @@ namespace leveldb {
 //>L0: <levelid + max_key> 
 
 //value: data block
-namespace {
+//namespace {
 struct KvWrapper {
   void* value;
   size_t cache_key_length; // cache_key_length
@@ -160,6 +161,73 @@ class SkipListBase { //Skiplist
   SkipListBase(const SkipListBase&) = delete;
   SkipListBase& operator=(const SkipListBase&) = delete;
 
+  // Iteration over the contents of a skip list
+  class Iterator {
+   public:
+    // Initialize an iterator over the specified list.
+    // The returned iterator is not valid.
+    explicit Iterator(const SkipListBase* list, const Slice& left_bound);
+
+    // Returns true iff the iterator is positioned at a valid node.
+    bool Valid() const;
+
+    // Returns the key at the current position.
+    // REQUIRES: Valid()
+    Node* node() const;
+
+    // Advances to the next position.
+    // REQUIRES: Valid()
+    void Next();
+
+    // Advances to the previous position.
+    // REQUIRES: Valid()
+    //void Prev();
+
+    // Advance to the first entry with a key >= target
+    void Seek(const Slice& target);
+
+    // Position at the first entry in list.
+    // Final state of iterator is Valid() iff list is not empty.
+    void SeekToFirst();
+
+    // Position at the last entry in list.
+    // Final state of iterator is Valid() iff list is not empty.
+    //void SeekToLast();
+
+    Slice key() const;
+
+    Node* TestAndReturn(Slice right_bound);
+
+   private:
+    const SkipListBase* list_;
+    Node* node_;
+    Slice left_bound_;
+    std::vector<char> left_bound_data_;
+
+    void SetLeftBound(const Slice& left_bound){
+      left_bound_data_.resize(left_bound.size());
+      memcpy(left_bound_data_.data(), left_bound.data(), left_bound.size());
+      left_bound_ = Slice(left_bound_data_.data(), left_bound.size());
+    }
+    // Intentionally copyable
+  };
+
+/*void PrintLast64Bits(const std::string& str) {
+  if (str.size() < 8) {
+          std::cerr << "The string is too short to have 64 bits." << std::endl;
+          return;
+      }
+
+      uint64_t result = 0; // 用于存储56位的结果
+      for (size_t i = str.size() - 8; i < str.size(); ++i) {
+          unsigned char byte = str[i];
+          unsigned char high_7_bits = byte >> 1; // 提取高7位
+          result = (result << 7) | high_7_bits; // 将高7位拼接到结果中
+      }
+
+      std::cout << "The 56-bit number in decimal: " << result << std::endl;
+}*/
+
   Node* Lookup(const Slice& key) { 
     Node* x = FindGreaterOrEqual(key, nullptr);
     int key_level = DecodeFixed32(key.data());
@@ -174,10 +242,6 @@ class SkipListBase { //Skiplist
       Slice key_target = Slice(key.data() + 4, key.size() - 4);
       Slice cache_key = x->GetKV()->key();
       int cache_level = DecodeFixed32(cache_key.data());
-      /*std::cout<<key_level<<" "<<cache_level<<std::endl;
-      std::cout<<key_target.ToString()<<std::endl;
-      std::cout<<x->GetKV()->MinKey().ToString()<<std::endl;
-      std::cout<<x->GetKV()->MaxKey().ToString()<<std::endl;*/
       
       /*if(cache_level == key_level){
         std::cout<<"Level MATCH!!!"<<std::endl;
@@ -189,14 +253,18 @@ class SkipListBase { //Skiplist
         std::cout<<"MinKey MATCH!!!"<<std::endl;
       }
       std::cout<<"*************************"<<std::endl<<std::endl;*/
+      /*std::cout<<"Lookup: cache_level "<<cache_level<<"; key_level "<<key_level<<std::endl;
+      std::cout<<"Lookup: key_target "<<key_target.ToString()<<std::endl;
+      PrintLast64Bits(key_target.ToString());
+      std::cout<<"Lookup: MinKey "<<x->GetKV()->MinKey().ToString()<<std::endl;
+      PrintLast64Bits(x->GetKV()->MinKey().ToString());
+      std::cout<<"Lookup: MaxKey "<<x->GetKV()->MaxKey().ToString()<<std::endl;
+      PrintLast64Bits(x->GetKV()->MaxKey().ToString());
+      std::cout<<"key vs max"<<compare_.UserCompare(key_target, x->GetKV()->MaxKey())<<std::endl;
+      std::cout<<"key vs min"<<compare_.UserCompare(key_target, x->GetKV()->MinKey())<<std::endl;*/
       if(cache_level == key_level 
               && compare_.UserCompare(key_target, x->GetKV()->MaxKey()) <= 0 
               && compare_.UserCompare(key_target, x->GetKV()->MinKey()) >= 0){
-        //std::cout<<"MATCH!!!"<<std::endl;
-        /*std::cout<<"Lookup: cache_level "<<cache_level<<"; key_level "<<key_level<<std::endl;
-        std::cout<<"Lookup: key_target "<<key_target.ToString()<<std::endl;
-        std::cout<<"Lookup: MinKey "<<x->GetKV()->MinKey().ToString()<<std::endl;
-        std::cout<<"Lookup: MaxKey "<<x->GetKV()->MaxKey().ToString()<<std::endl;*/
         return x;
       }
       x = nullptr;
@@ -225,6 +293,7 @@ class SkipListBase { //Skiplist
     std::cout<<"Insert: MinKey "<<h->MinKey().ToString()<<std::endl;
     std::cout<<"Insert: MaxKey "<<h->MaxKey().ToString()<<std::endl;*/
     if(x != nullptr && Equal(h->key(), x->GetKV()->key())){
+      std::cout<<"Duplicate Insert: MaxKey "<<h->MaxKey().ToString()<<std::endl;
       return false;
     }
     // Our data structure does not allow duplicate insertion
@@ -286,6 +355,74 @@ class SkipListBase { //Skiplist
   Random rnd_;
 
 };
+
+
+inline SkipListBase::Iterator::Iterator(const SkipListBase* list, const Slice& left_bound) {
+  list_ = list;
+  node_ = nullptr;
+  SetLeftBound(left_bound);
+}
+
+inline bool SkipListBase::Iterator::Valid() const {
+  return node_ != nullptr;
+}
+
+inline Node* SkipListBase::Iterator::node() const {
+  assert(Valid());
+  return node_;
+}
+
+inline void SkipListBase::Iterator::Next() {
+  assert(Valid());
+  node_ = node_->Next(0);
+}
+
+/*inline void SkipListBase::Iterator::Prev() {
+  // Instead of using explicit "prev" links, we just search for the
+  // last node that falls before key.
+  assert(Valid());
+  node_ = list_->FindLessThan(node_->key);
+  if (node_ == list_->head_) {
+    node_ = nullptr;
+  }
+}*/
+
+inline void SkipListBase::Iterator::Seek(const Slice& target) {
+  node_ = list_->FindGreaterOrEqual(target, nullptr);
+}
+
+inline void SkipListBase::Iterator::SeekToFirst() {
+  node_ = list_->head_->Next(0);
+}
+
+inline Slice SkipListBase::Iterator::key() const{
+  return node_->GetKV()->key();
+}
+
+/*template <typename Key, class Comparator>
+inline void SkipList<Key, Comparator>::Iterator::SeekToLast() {
+  node_ = list_->FindLast();
+  if (node_ == list_->head_) {
+    node_ = nullptr;
+  }
+}*/
+
+inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
+  Slice min_key = node_->GetKV()->MinKey();
+  Slice max_key = node_->GetKV()->MaxKey();
+  std::cout<<"bound: "<<left_bound_.ToString()<<" "<<right_bound.ToString()<<std::endl;
+  std::cout<<"node: "<<min_key.ToString()<<" "<<max_key.ToString()<<std::endl;
+  std::cout<<std::endl;
+  if(list_->compare_.Compare(left_bound_, min_key) <= 0 && 
+      list_->compare_.Compare(right_bound, max_key) >= 0){
+        std::cout<<"Test And Return match"<<std::endl;
+        SetLeftBound(right_bound);
+        return node_;
+  } else{
+    SetLeftBound(right_bound);
+    return nullptr;
+  }
+}
 
 SkipListBase::SkipListBase(CacheComparator cmp, Arena* arena)
     : compare_(cmp),
@@ -383,6 +520,95 @@ class SkipListLRUCache {
     return usage_;
   }
 
+  class CacheIterator : public Iterator {
+   public:
+    // Initialize an iterator over the specified list.
+    // The returned iterator is not valid.
+    explicit CacheIterator(const SkipListBase* list, SkipListLRUCache* cache, const Slice& left_bound)
+                                  : list_cache_(list, left_bound), cache_(cache), now_node_(nullptr){}
+
+    //[todo] ~CacheIterator() {}?
+    // Returns true iff the iterator is positioned at a valid node.
+    bool Valid() const override{
+      return list_cache_.Valid();
+    }
+
+    // Returns the key at the current position.
+    // REQUIRES: Valid()
+    // Advances to the next position.
+    // REQUIRES: Valid()
+    void Next() override{
+      assert(Valid());
+      list_cache_.Next();
+      cache_->Unref(now_node_); //[todo] or Release?
+      cache_->Erase(now_node_->GetKV()->key());
+      if(list_cache_.Valid()){
+        now_node_ = list_cache_.node();
+        cache_->Ref(now_node_);
+      }
+    }
+
+    // Advance to the first entry with a key >= target
+    void Seek(const Slice& target) override{
+      list_cache_.Seek(target);
+      if(list_cache_.Valid()){
+        now_node_ = list_cache_.node();
+        cache_->Ref(now_node_);
+      }
+    }
+
+    // Position at the first entry in list.
+    // Final state of iterator is Valid() iff list is not empty.
+    void SeekToFirst() override{
+      list_cache_.SeekToFirst();
+      if(list_cache_.Valid()){
+        now_node_ = list_cache_.node();
+        cache_->Ref(now_node_);
+      }
+    }
+
+    void SeekToLast() override{}
+
+    void Prev() override{}
+
+    Slice key() const override{
+      assert(Valid());
+      return list_cache_.key();
+    }
+
+    Slice value() const override{}
+
+    Status status() const override{
+      return Status::OK();
+    }
+
+    /*void* node() override{
+      assert(Valid());
+      cache_->Ref(now_node_);
+      return list_cache_.node();
+    }*/
+
+    void* TestAndReturn(Slice right_bound) override{
+      assert(Valid());
+      Node* node = list_cache_.TestAndReturn(right_bound);
+      if(node != nullptr){
+        cache_->Ref(node);
+        return node;
+      } 
+      return node;
+    }
+
+   private:
+    SkipListLRUCache* cache_;
+    SkipListBase::Iterator list_cache_;
+    Node* now_node_;
+  };
+
+  Iterator* NewCacheIterator(const Slice& left_bound){
+    return new CacheIterator(&table_, this, left_bound);
+  }
+
+
  private:
   void LRU_Remove(Node* e);
   void LRU_Append(Node* list, Node* e);
@@ -406,7 +632,7 @@ class SkipListLRUCache {
   // Entries are in use by clients, and have refs >= 2 and in_cache==true.
   Node in_use_ GUARDED_BY(mutex_);
 
-  Arena arena_ GUARDED_BY(mutex_);;
+  Arena arena_ GUARDED_BY(mutex_);
 
   SkipListBase table_ GUARDED_BY(mutex_);
 
@@ -434,6 +660,7 @@ SkipListLRUCache::~SkipListLRUCache() {
 }
 
 void SkipListLRUCache::Ref(Node* e) {
+  //std::cout<<"Ref"<<std::endl;
   if (e->refs == 1 && e->in_cache) {  // If on lru_ list, move to in_use_ list.
     LRU_Remove(e);
     LRU_Append(&in_use_, e);
@@ -442,6 +669,7 @@ void SkipListLRUCache::Ref(Node* e) {
 }
 
 void SkipListLRUCache::Unref(Node* e) {
+  //std::cout<<"UnRef"<<std::endl;
   assert(e->refs > 0);
   e->refs--;
   if (e->refs == 0) {  // Deallocate.
@@ -479,6 +707,7 @@ Cache::Handle* SkipListLRUCache::Lookup(const Slice& key) {
 
 void SkipListLRUCache::Release(Cache::Handle* handle) {
   MutexLock l(&mutex_);
+  //std::cout<<"Release"<<std::endl;
   Unref(reinterpret_cast<Node*>(handle));
 }
 
@@ -504,6 +733,7 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
   e->deleter = deleter;
   e->charge = charge;
   e->refs = 1;  // for the returned handle. Unref by iter's RegisterCleanup
+  //std::cout<<"Insert"<<std::endl;
   if (capacity_ > 0) {
     e->refs++;  // for the cache's reference.[LRU_Append]
     e->in_cache = true;
@@ -511,6 +741,7 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
     usage_ += charge;
     bool if_insert = table_.Insert(e, height);
     //does not allow duplicate insertion, does not need to return and erase
+    //assert(if_insert);
     if(!if_insert) {
       std::cout<<"Duplicate insertion"<<std::endl;
       e->refs--;
@@ -619,9 +850,13 @@ class LRUCacheWrapper : public Cache {
   Slice Key(Handle* handle) const override {
     return reinterpret_cast<Node*>(handle)->GetKV()->key();
   }
+
+  Iterator* NewIterator(const Slice& left_bound) override {
+    return lru_cache_.NewCacheIterator(left_bound);
+  }
 };
 
-}  // end anonymous namespace
+//}  // end anonymous namespace
 
 Cache* NewSkipListLRUCache(uint64_t capacity, const Comparator* user_cmp, bool is_monitor) { 
   return new LRUCacheWrapper(capacity, user_cmp, is_monitor); 

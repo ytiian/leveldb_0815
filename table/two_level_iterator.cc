@@ -12,76 +12,43 @@
 
 namespace leveldb {
 
-//namespace {
-
-/*typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const CallerType&);
-
-class TwoLevelIterator : public Iterator {
- public:
-  TwoLevelIterator(Iterator* index_iter, BlockFunction block_function,
-                   void* arg, const ReadOptions& options);
-
-  ~TwoLevelIterator() override;
-
-  void Seek(const Slice& target) override;
-  void SeekToFirst() override;
-  void SeekToLast() override;
-  void Next() override;
-  void Prev() override;
-
-  bool Valid() const override { return data_iter_.Valid(); }
-  Slice key() const override {
-    assert(Valid());
-    return data_iter_.key();
-  }
-  Slice value() const override {
-    assert(Valid());
-    return data_iter_.value();
-  }
-  Status status() const override {
-    // It'd be nice if status() returned a const Status& instead of a Status
-    if (!index_iter_.status().ok()) {
-      return index_iter_.status();
-    } else if (data_iter_.iter() != nullptr && !data_iter_.status().ok()) {
-      return data_iter_.status();
-    } else {
-      return status_;
-    }
-  }
-
-  Slice keyAndHandle(Slice* handle) {
-    assert(Valid());
-    *handle = Slice(data_block_handle_);
-    return key();
-  }
-
- private:
-  void SaveError(const Status& s) {
-    if (status_.ok() && !s.ok()) status_ = s;
-  }
-  void SkipEmptyDataBlocksForward();
-  void SkipEmptyDataBlocksBackward();
-  void SetDataIterator(Iterator* data_iter);
-  void InitDataBlock();
-
-  BlockFunction block_function_;
-  void* arg_;
-  const ReadOptions options_;
-  Status status_;
-  IteratorWrapper index_iter_;
-  IteratorWrapper data_iter_;  // May be nullptr
-  // If data_iter_ is non-null, then "data_block_handle_" holds the
-  // "index_value" passed to block_function_ to create the data_iter_.
-  std::string data_block_handle_;
-};*/
-
 TwoLevelIterator::TwoLevelIterator(Iterator* index_iter,
                                    BlockFunction block_function, void* arg,
                                    const ReadOptions& options)
     : block_function_(block_function),
+      file_function_(nullptr),
+      cache_function_(nullptr),
       arg_(arg),
       options_(options),
       index_iter_(index_iter),
+      cache_iter_(nullptr),
+      data_iter_(nullptr),
+      level_(0) {}
+
+TwoLevelIterator::TwoLevelIterator(Iterator* index_iter,
+                                   FileFunction file_function, void* arg,
+                                   const ReadOptions& options)
+    : block_function_(nullptr),
+      file_function_(file_function),
+      cache_function_(nullptr),
+      arg_(arg),
+      options_(options),
+      index_iter_(index_iter),
+      cache_iter_(nullptr),
+      data_iter_(nullptr),
+      level_(0) {}
+
+TwoLevelIterator::TwoLevelIterator(Iterator* index_iter, Iterator* cache_iter, const uint32_t& level,
+                                   CacheFunction cache_function, void* arg,
+                                   const ReadOptions& options)
+    : block_function_(nullptr),
+      file_function_(nullptr),
+      cache_function_(cache_function),
+      arg_(arg),
+      level_(level),
+      options_(options),
+      index_iter_(index_iter),
+      cache_iter_(cache_iter),
       data_iter_(nullptr) {}
 
 TwoLevelIterator::~TwoLevelIterator() = default;
@@ -160,7 +127,21 @@ void TwoLevelIterator::InitDataBlock() {
       // data_iter_ is already constructed with this iterator, so
       // no need to change anything
     } else {
-      Iterator* iter = (*block_function_)(arg_, options_, handle, CallerType::kCallerTypeUnknown);
+      Slice largest = index_iter_.key();
+      Iterator* iter;
+      if(block_function_ != nullptr){
+        iter = (*block_function_)(arg_, options_, handle, CallerType::kCallerTypeUnknown);
+      }
+      if(file_function_ != nullptr){
+        const Slice& left_bound = index_iter_.left_bound();
+        const Slice& right_bound = index_iter_.right_bound();
+        iter = (*file_function_)(arg_, options_, handle, left_bound, right_bound, CallerType::kCallerTypeUnknown);
+      }
+      if(cache_function_!= nullptr){
+        const Slice& right_bound = index_iter_.right_bound();
+        const Slice& index_key = index_iter_.key();
+        iter = (*cache_function_)(arg_, options_, index_key, handle, cache_iter_.iter(), right_bound, level_);
+      }
       data_block_handle_.assign(handle.data(), handle.size());
       SetDataIterator(iter);
     }
@@ -173,6 +154,19 @@ Iterator* NewTwoLevelIterator(Iterator* index_iter,
                               BlockFunction block_function, void* arg,
                               const ReadOptions& options) {
   return new TwoLevelIterator(index_iter, block_function, arg, options);
+}
+
+Iterator* NewTwoLevelIterator(Iterator* index_iter,
+                              FileFunction file_function, void* arg,
+                              const ReadOptions& options) {
+  return new TwoLevelIterator(index_iter, file_function, arg, options);
+}
+
+Iterator* NewTwoLevelIterator(Iterator* index_iter, Iterator* cache_iter,
+                              const uint32_t& level,
+                              CacheFunction cache_function, void* arg, 
+                              const ReadOptions& options) {
+  return new TwoLevelIterator(index_iter, cache_iter, level, cache_function, arg, options);
 }
 
 }  // namespace leveldb
