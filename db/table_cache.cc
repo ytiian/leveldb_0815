@@ -57,7 +57,7 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
       }
     }
     if (s.ok()) {
-      s = Table::Open(options_, file, file_size, &table);
+      s = Table::Open(options_, file, file_size, &table, file_number);
     }
 
     if (!s.ok()) {
@@ -108,7 +108,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   }
 
   Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-  Iterator* result = table->NewIterator(options, left_bound, right_bound, level);
+  Iterator* result = table->NewIterator(options, left_bound, right_bound, level, file_number);
   result->RegisterCleanup(&UnrefEntry, cache_, handle);
 
   return result;

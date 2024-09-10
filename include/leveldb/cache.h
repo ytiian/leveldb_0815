@@ -82,7 +82,7 @@ class LEVELDB_EXPORT Cache {
                          void (*deleter)(const Slice& key, void* value)) = 0;
 
   virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
-                         void (*deleter)(const Slice& key, void* value), const Slice& min_key) = 0;
+                         void (*deleter)(const Slice& key, void* value), const Slice& min_key, const uint64_t& file_number) {return nullptr;}
 
   // If the cache has no mapping for "key", returns nullptr.
   //
@@ -130,7 +130,7 @@ class LEVELDB_EXPORT Cache {
 
   virtual Slice Key(Handle* handle) const = 0;
 
-  virtual Iterator* NewIterator(const Slice& left_bound) {
+  virtual Iterator* NewIterator(const Slice& left_bound, const uint64_t& file_number) {
     return nullptr;
   }
 

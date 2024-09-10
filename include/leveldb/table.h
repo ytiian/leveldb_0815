@@ -40,7 +40,7 @@ class LEVELDB_EXPORT Table {
   //
   // *file must remain live while this Table is in use.
   static Status Open(const Options& options, RandomAccessFile* file,
-                     uint64_t file_size, Table** table);
+                     uint64_t file_size, Table** table, uint64_t file_number = 0);
 
   Table(const Table&) = delete;
   Table& operator=(const Table&) = delete;
@@ -53,7 +53,7 @@ class LEVELDB_EXPORT Table {
   Iterator* NewIterator(const ReadOptions&) const;
 
   Iterator* NewIterator(const ReadOptions&, const Slice& left_bound,
-                        const Slice& right_bound, const int& level) const;
+                        const Slice& right_bound, const int& level, const uint64_t& file_number) const;
 
   // Given a key, return an approximate byte offset in the file where
   // the data for that key begins (or would begin if the key were

@@ -31,7 +31,7 @@ struct Table::Rep {
   Options options;
   Status status;
   RandomAccessFile* file;
-  uint64_t cache_id;
+  uint64_t file_number;
   FilterBlockReader* filter;
   const char* filter_data;
 
@@ -40,7 +40,7 @@ struct Table::Rep {
 };
 
 Status Table::Open(const Options& options, RandomAccessFile* file,
-                   uint64_t size, Table** table) {
+                   uint64_t size, Table** table, uint64_t file_number) {
   *table = nullptr;
   if (size < Footer::kEncodedLength) {
     return Status::Corruption("file is too short to be an sstable");
@@ -73,7 +73,7 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
     rep->file = file;
     rep->metaindex_handle = footer.metaindex_handle();
     rep->index_block = index_block;
-    rep->cache_id = (options.block_cache ? options.block_cache->NewId() : 0);
+    rep->file_number = file_number;
     rep->filter_data = nullptr;
     rep->filter = nullptr;
     *table = new Table(rep);
@@ -240,7 +240,7 @@ Iterator* Table::BlockReaderWithoutCache(void* arg, const ReadOptions& options,
           if(ucmp != nullptr && ucmp->Compare(Slice(min_key.data(), min_key.size() - 8), Slice(k.data(), k.size() - 8)) <= 0 
               && ucmp->Compare(Slice(max_key.data(), max_key.size() - 8), Slice(k.data(), k.size() - 8)) >= 0){
             cache_handle = block_cache->Insert(cache_key, block, block->size(),
-                                                &DeleteCachedBlock, min_key);
+                                                &DeleteCachedBlock, min_key, table->rep_->file_number);
           }
           if(cache_handle != nullptr){
             iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
@@ -321,13 +321,13 @@ Iterator* Table::NewIterator(const ReadOptions& options) const {
 }
 
 Iterator* Table::NewIterator(const ReadOptions& options, 
-    const Slice& left_bound, const Slice& right_bound, const int& level) const {
+    const Slice& left_bound, const Slice& right_bound, const int& level, const uint64_t& file_number) const {
   Cache* block_cache = rep_->options.block_cache;
   char cache_key_buffer[sizeof(uint32_t) + left_bound.size()];
   EncodeFixed32(cache_key_buffer, level); 
   memcpy(cache_key_buffer + sizeof(uint32_t), left_bound.data(), left_bound.size());  
   Slice key(cache_key_buffer, sizeof(cache_key_buffer));
-  Iterator* cache_iter = block_cache->NewIterator(key);
+  Iterator* cache_iter = block_cache->NewIterator(key, file_number);
   cache_iter->Seek(key);
   //std::cout<<"cache_iter valid:"<<cache_iter->Valid()<<std::endl;
   //std::cout<<"cache_iter seek:"<< key.ToString() <<std::endl;

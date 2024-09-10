@@ -32,6 +32,7 @@ struct KvWrapper {
   void* value;
   size_t cache_key_length; // cache_key_length
   size_t key_data_length; // min_key_length = key_data_length - cache_key_length
+  uint64_t file_number;
   bool if_level0;    // Whether entry is in level0.
   char data[1];  //Passed in by the caller
   // format: L0: cache_key
@@ -56,6 +57,10 @@ struct KvWrapper {
   uint32_t level() const{
     Slice level(data, 4);
     return DecodeFixed32(level.data());
+  }
+
+  uint64_t FileNumber() const{
+    return file_number;
   }
 };
 
@@ -172,7 +177,7 @@ class SkipListBase { //Skiplist
    public:
     // Initialize an iterator over the specified list.
     // The returned iterator is not valid.
-    explicit Iterator(const SkipListBase* list, const Slice& left_bound);
+    explicit Iterator(const SkipListBase* list, const Slice& left_bound,const uint64_t& file_number);
 
     // Returns true iff the iterator is positioned at a valid node.
     bool Valid() const;
@@ -208,6 +213,7 @@ class SkipListBase { //Skiplist
     const SkipListBase* list_;
     Node* now_node_;
     Node* next_node_;
+    const uint64_t expected_file_;
     Slice left_bound_;
     std::vector<char> left_bound_data_;
 
@@ -300,7 +306,8 @@ class SkipListBase { //Skiplist
     std::cout<<"Insert: MinKey "<<h->MinKey().ToString()<<std::endl;
     std::cout<<"Insert: MaxKey "<<h->MaxKey().ToString()<<std::endl;*/
     if(x != nullptr && Equal(h->key(), x->GetKV()->key())){
-      std::cout<<"Duplicate Insert: MaxKey "<<h->MaxKey().ToString()<<std::endl;
+      //std::cout<<"Duplicate Insert want: "<<h->MinKey().ToString()<<" "<<h->MaxKey().ToString()<<" "<<h->FileNumber() <<std::endl;
+      //std::cout<<"Duplicate Insert exit: "<<x->GetKV()->MinKey().ToString()<<" "<<x->GetKV()->MaxKey().ToString()<<" "<<x->GetKV()->FileNumber() <<std::endl;
       return false;
     }
     // Our data structure does not allow duplicate insertion
@@ -366,11 +373,9 @@ class SkipListBase { //Skiplist
 };
 
 
-inline SkipListBase::Iterator::Iterator(const SkipListBase* list, const Slice& left_bound) {
-  list_ = list;
-  now_node_ = nullptr;
-  next_node_ = nullptr;
-  SetLeftBound(left_bound);
+inline SkipListBase::Iterator::Iterator(const SkipListBase* list, const Slice& left_bound, const uint64_t& file_number):
+    list_(list), now_node_(nullptr), next_node_(nullptr), expected_file_(file_number){
+      SetLeftBound(left_bound);
 }
 
 inline bool SkipListBase::Iterator::Valid() const {
@@ -428,8 +433,14 @@ inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
     uint32_t next_node_level = next_node_->GetKV()->level();
     uint32_t bound_level = DecodeFixed32(right_bound.data());
 
-    Slice min_key = next_node_->GetKV()->MinKey();
-    Slice max_key = next_node_->GetKV()->MaxKey();
+    Slice min_key, max_key;
+    
+    if(next_node_level != 0){
+      min_key = next_node_->GetKV()->MinKey();
+      max_key = next_node_->GetKV()->MaxKey();
+    }
+
+    uint64_t file_number = next_node_->GetKV()->FileNumber();
     //todo
     /*std::cout<<std::endl<<std::endl;
     std::cout<<"level"<<next_node_level<<" "<<bound_level<<std::endl;
@@ -437,10 +448,15 @@ inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
                 Slice(right_bound.data()+4, right_bound.size()-4).ToString() <<std::endl;
     std::cout<<"now_node:"<<now_node_->GetKV()->MinKey().ToString()<<" "<<now_node_->GetKV()->MaxKey().ToString()<<std::endl;            
     std::cout<<"next_node:"<<min_key.ToString()<<" "<<max_key.ToString()<<std::endl;*/
-    if(next_node_level == bound_level &&
+    
+    if(next_node_level == bound_level && 
       user_cmp->Compare(min_key, Slice(left_bound_.data()+4, left_bound_.size()-4)) >= 0 && 
         user_cmp->Compare(max_key, Slice(right_bound.data()+4, right_bound.size()-4)) <= 0){
         //std::cout<<"compaction cache match"<<std::endl;
+        if(file_number != expected_file_){
+          now_node_ = next_node_;
+          continue;
+        }
         now_node_ = next_node_;
         SetLeftBound(right_bound);
         return now_node_;
@@ -456,8 +472,7 @@ inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
       //std::cout<<"right_bound < min_key"<<std::endl;
       return nullptr;
     }else{//[todo] need to delete
-      bool flag = false;
-      assert(flag);
+      assert(file_number != expected_file_);
       //std::cout<<"another case"<<std::endl;
       now_node_ = next_node_;
       continue;
@@ -566,7 +581,7 @@ class SkipListLRUCache {
   // Like Cache methods, but with an extra "hash" parameter.
   Cache::Handle* Insert(const Slice& key, void* value,
                         uint64_t charge,
-                        void (*deleter)(const Slice& key, void* value), const Slice& min_key);
+                        void (*deleter)(const Slice& key, void* value), const Slice& min_key, const uint64_t& file_number);
   Cache::Handle* Insert(const Slice& key, void* value,
                         uint64_t charge,
                         void (*deleter)(const Slice& key, void* value));
@@ -583,8 +598,8 @@ class SkipListLRUCache {
    public:
     // Initialize an iterator over the specified list.
     // The returned iterator is not valid.
-    explicit CacheIterator(const SkipListBase* list, SkipListLRUCache* cache, const Slice& left_bound)
-                                  : list_cache_(list, left_bound), cache_(cache), now_node_(nullptr){}
+    explicit CacheIterator(const SkipListBase* list, SkipListLRUCache* cache, const Slice& left_bound, const uint64_t& file_number)
+                                  : list_cache_(list, left_bound, file_number), cache_(cache), now_node_(nullptr){}
 
     //[todo] ~CacheIterator() {}?
     // Returns true iff the iterator is positioned at a valid node.
@@ -610,7 +625,7 @@ class SkipListLRUCache {
       list_cache_.Seek(target);
       if(list_cache_.Valid()){
         now_node_ = list_cache_.node();
-        cache_->Ref(now_node_);
+        cache_->Ref(now_node_);//one for iter, no return
       }
     }
 
@@ -646,19 +661,21 @@ class SkipListLRUCache {
     }*/
 
     void* TestAndReturn(Slice right_bound) override{
-      //MutexLock l(&cache_->mutex_);
       assert(Valid());
       Node* last_node = now_node_;
       Node* node = list_cache_.TestAndReturn(right_bound);
       if(node != nullptr && node != now_node_){
-        cache_->Ref(node); //one for iter
-        cache_->Ref(node); //one for return
-        now_node_ = node;
-        cache_->Unref(last_node);//for iter
+        {
+          MutexLock l(&cache_->mutex_);
+          cache_->Ref(node); //one for iter
+          cache_->Ref(node); //one for return
+          now_node_ = node;
+          cache_->Unref(last_node);//for iter          
+        }
         cache_->Erase(last_node->GetKV()->key());
         return node;
       } 
-      return node;
+      return nullptr;
     }
 
    private:
@@ -667,8 +684,8 @@ class SkipListLRUCache {
     Node* now_node_;
   };
 
-  Iterator* NewCacheIterator(const Slice& left_bound){
-    return new CacheIterator(&table_, this, left_bound);
+  Iterator* NewCacheIterator(const Slice& left_bound, const uint64_t& file_number){
+    return new CacheIterator(&table_, this, left_bound, file_number);
   }
 
 
@@ -715,7 +732,6 @@ SkipListLRUCache::~SkipListLRUCache() {
   for(Node* e = in_use_.cache_next; e != &in_use_;) {
     num++;
   }
-  std::cout<<"in_use_:"<<num<<std::endl; 
   assert(in_use_.cache_next == &in_use_);  // Error if caller has an unreleased handle
   for (Node* e = lru_.cache_next; e != &lru_;) {
     Node* next = e->cache_next;
@@ -746,8 +762,10 @@ void SkipListLRUCache::Unref(Node* e) {
     free(e);
   } else if (e->in_cache && e->refs == 1) {
     // No longer in use; move to lru_ list.
-    LRU_Remove(e);
-    LRU_Append(&lru_, e);
+    if(e->in_cache){
+      LRU_Remove(e);
+      LRU_Append(&lru_, e);
+    }
   }
 }
 
@@ -782,7 +800,8 @@ void SkipListLRUCache::Release(Cache::Handle* handle) {
 Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
                                 uint64_t charge,
                                 void (*deleter)(const Slice& key,
-                                                void* value), const Slice& min_key) {
+                                                void* value), const Slice& min_key, 
+                                                        const uint64_t& file_number) {
   MutexLock l(&mutex_);
 
   KvWrapper* kv = 
@@ -791,6 +810,7 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
   kv->cache_key_length = key.size();
   kv->key_data_length = key.size() + min_key.size();
   kv->if_level0 = min_key.size() == 0 ? 1 : 0; //min_key.size()=0 -> if_level0 = true
+  kv->file_number = file_number;
   std::memcpy(kv->data, key.data(), key.size());
   if(min_key.size() > 0){
     std::memcpy(kv->data + key.size(), min_key.data(), min_key.size());
@@ -811,9 +831,11 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
     //does not allow duplicate insertion, does not need to return and erase
     //assert(if_insert);
     if(!if_insert) {
-      std::cout<<"Duplicate insertion"<<std::endl;
-      e->refs--;
+      //std::cout<<"Duplicate insertion"<<std::endl;
+      e->refs = 0;
       e->in_cache = false;
+      LRU_Remove(e);
+      free(e);
       usage_ -= charge;
       return nullptr;
     }
@@ -822,6 +844,9 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
     //e->next = nullptr;
     //[todo] capacity_ == 0
   }
+  /*if(kv->level() != 0){
+    std::cout<<"Insert: "<<kv->MaxKey().ToString()<<" "<<kv->FileNumber()<<std::endl;
+  }*/
   while (usage_ > capacity_ && lru_.cache_next != &lru_) {
     Node* old = lru_.cache_next;
     assert(old->refs == 1);
@@ -838,7 +863,7 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
                                 uint64_t charge,
                                 void (*deleter)(const Slice& key,
                                                 void* value)) {                                            
-    return Insert(key, value, charge, deleter, Slice());
+    return Insert(key, value, charge, deleter, Slice(), 0);
 }
 
 // If e != nullptr, finish removing *e from the cache; it has already been
@@ -886,8 +911,8 @@ class LRUCacheWrapper : public Cache {
     return lru_cache_.Insert(key, value, charge, deleter);
   }
   Handle* Insert(const Slice& key, void* value, uint64_t charge,
-                 void (*deleter)(const Slice& key, void* value), const Slice& min_key) override{
-    return lru_cache_.Insert(key, value, charge, deleter, min_key);
+                 void (*deleter)(const Slice& key, void* value), const Slice& min_key, const uint64_t& file_number) override{
+    return lru_cache_.Insert(key, value, charge, deleter, min_key, file_number);
   }
   Handle* Lookup(const Slice& key) override {
     return lru_cache_.Lookup(key);
@@ -919,8 +944,8 @@ class LRUCacheWrapper : public Cache {
     return reinterpret_cast<Node*>(handle)->GetKV()->key();
   }
 
-  Iterator* NewIterator(const Slice& left_bound) override {
-    return lru_cache_.NewCacheIterator(left_bound);
+  Iterator* NewIterator(const Slice& left_bound, const uint64_t& file_number) override {
+    return lru_cache_.NewCacheIterator(left_bound, file_number);
   }
 };
 

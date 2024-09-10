@@ -1020,18 +1020,24 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         drop = true;
       } 
 
-      if(!drop && is_l0_compaction){ //kv may be from level-1
+      if(!drop){ //kv may be from level-1
         TableHandle* result = nullptr;
         result = l0_reminder_->ReadFromReminder(ikey.user_key);
-        if(result != nullptr){
-          Slice value = result->value();
-          uint64_t file_number;
-          GetVarint64(&value, &file_number);
-          if(!compact->compaction->IfInInputFiles(file_number)){ //have new kv version
+        if(is_l0_compaction){
+          if(result != nullptr){
+            Slice value = result->value();
+            uint64_t file_number;
+            GetVarint64(&value, &file_number);
+            if(!compact->compaction->IfInInputFiles(file_number)){ //have new kv version
+              drop = true;
+            } else{
+              now_queue_.push(L0ReminderEntry(ikey.user_key, value));
+            }          
+          }
+        }else {
+          if(result != nullptr){
             drop = true;
-          } else{
-            now_queue_.push(L0ReminderEntry(ikey.user_key, value));
-          }          
+          }
         }
       }
 

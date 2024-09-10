@@ -362,10 +362,6 @@ class ShardedLRUCache : public Cache {
     const uint32_t hash = HashSlice(key);
     return shard_[Shard(hash)].Insert(key, hash, value, charge, deleter);
   }
-  Handle* Insert(const Slice& key, void* value, uint64_t charge,
-                 void (*deleter)(const Slice& key, void* value), const Slice& min_key) override {
-    return nullptr;
-  }
   Handle* Lookup(const Slice& key) override {
     const uint32_t hash = HashSlice(key);
     return shard_[Shard(hash)].Lookup(key, hash);
