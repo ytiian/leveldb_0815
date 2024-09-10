@@ -52,6 +52,11 @@ struct KvWrapper {
     assert(!if_level0);
     return Slice(data + cache_key_length, key_data_length - cache_key_length);
   }
+
+  uint32_t level() const{
+    Slice level(data, 4);
+    return DecodeFixed32(level.data());
+  }
 };
 
 struct Node {
@@ -108,6 +113,7 @@ class CacheComparator : public Comparator {
                              const Slice& limit) const override; //to do
   void FindShortSuccessor(std::string* key) const override;//to do
   int UserCompare(const Slice& akey, const Slice& bkey) const;
+  const Comparator* user_comparator() const { return internal_comparator_.user_comparator(); }
 
 };
 
@@ -200,7 +206,8 @@ class SkipListBase { //Skiplist
 
    private:
     const SkipListBase* list_;
-    Node* node_;
+    Node* now_node_;
+    Node* next_node_;
     Slice left_bound_;
     std::vector<char> left_bound_data_;
 
@@ -332,6 +339,7 @@ class SkipListBase { //Skiplist
   //When to Release deleted Node?
   //SkipListLRUCache::FinishErase(Node* e); this e from Remove return
 
+  Node* GetHead() const { return head_; }
  private:
   enum { kMaxHeight = 12 };
   inline int GetMaxHeight() const {
@@ -340,6 +348,7 @@ class SkipListBase { //Skiplist
 
   Node* NewNode(KvWrapper* key, int height);
   Node* FindGreaterOrEqual(const Slice& key, Node** prev) const;
+  Node* FindLessThan(const Slice& key) const;
   bool KeyIsAfterNode(const Slice& key, Node* n) const;
   int RandomHeight();
   bool Equal(const Slice& a, const Slice& b) const { return (compare_.Compare(a, b) == 0); }
@@ -359,22 +368,22 @@ class SkipListBase { //Skiplist
 
 inline SkipListBase::Iterator::Iterator(const SkipListBase* list, const Slice& left_bound) {
   list_ = list;
-  node_ = nullptr;
+  now_node_ = nullptr;
+  next_node_ = nullptr;
   SetLeftBound(left_bound);
 }
 
 inline bool SkipListBase::Iterator::Valid() const {
-  return node_ != nullptr;
+  return (now_node_ != nullptr && now_node_ != list_->GetHead());
 }
 
 inline Node* SkipListBase::Iterator::node() const {
   assert(Valid());
-  return node_;
+  return now_node_;
 }
 
 inline void SkipListBase::Iterator::Next() {
-  assert(Valid());
-  node_ = node_->Next(0);
+
 }
 
 /*inline void SkipListBase::Iterator::Prev() {
@@ -388,15 +397,17 @@ inline void SkipListBase::Iterator::Next() {
 }*/
 
 inline void SkipListBase::Iterator::Seek(const Slice& target) {
-  node_ = list_->FindGreaterOrEqual(target, nullptr);
+  now_node_ = list_->FindLessThan(target);
+  next_node_ = now_node_;
 }
 
 inline void SkipListBase::Iterator::SeekToFirst() {
-  node_ = list_->head_->Next(0);
+  //node_ = list_->head_->Next(0);
 }
 
 inline Slice SkipListBase::Iterator::key() const{
-  return node_->GetKV()->key();
+  //return node_->GetKV()->key();
+  return Slice();
 }
 
 /*template <typename Key, class Comparator>
@@ -408,19 +419,49 @@ inline void SkipList<Key, Comparator>::Iterator::SeekToLast() {
 }*/
 
 inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
-  Slice min_key = node_->GetKV()->MinKey();
-  Slice max_key = node_->GetKV()->MaxKey();
-  std::cout<<"bound: "<<left_bound_.ToString()<<" "<<right_bound.ToString()<<std::endl;
-  std::cout<<"node: "<<min_key.ToString()<<" "<<max_key.ToString()<<std::endl;
-  std::cout<<std::endl;
-  if(list_->compare_.Compare(left_bound_, min_key) <= 0 && 
-      list_->compare_.Compare(right_bound, max_key) >= 0){
-        std::cout<<"Test And Return match"<<std::endl;
+  //std::cout<<"assert:" <<now_node_->GetKV()->MaxKey().ToString()<<" "<<right_bound.ToString()<<std::endl;
+  //assert(list_->compare_.Compare(now_node_->GetKV()->key(), left_bound_) < 0);
+  assert(now_node_ == next_node_);
+  const Comparator* user_cmp = list_->compare_.user_comparator();
+  while(1){
+    next_node_ = now_node_->Next(0);
+    uint32_t next_node_level = next_node_->GetKV()->level();
+    uint32_t bound_level = DecodeFixed32(right_bound.data());
+
+    Slice min_key = next_node_->GetKV()->MinKey();
+    Slice max_key = next_node_->GetKV()->MaxKey();
+    //todo
+    /*std::cout<<std::endl<<std::endl;
+    std::cout<<"level"<<next_node_level<<" "<<bound_level<<std::endl;
+    std::cout<<"bound:"<< Slice(left_bound_.data()+4, left_bound_.size()-4).ToString() <<" "<< 
+                Slice(right_bound.data()+4, right_bound.size()-4).ToString() <<std::endl;
+    std::cout<<"now_node:"<<now_node_->GetKV()->MinKey().ToString()<<" "<<now_node_->GetKV()->MaxKey().ToString()<<std::endl;            
+    std::cout<<"next_node:"<<min_key.ToString()<<" "<<max_key.ToString()<<std::endl;*/
+    if(next_node_level == bound_level &&
+      user_cmp->Compare(min_key, Slice(left_bound_.data()+4, left_bound_.size()-4)) >= 0 && 
+        user_cmp->Compare(max_key, Slice(right_bound.data()+4, right_bound.size()-4)) <= 0){
+        //std::cout<<"compaction cache match"<<std::endl;
+        now_node_ = next_node_;
         SetLeftBound(right_bound);
-        return node_;
-  } else{
-    SetLeftBound(right_bound);
-    return nullptr;
+        return now_node_;
+    }else if( next_node_level < bound_level || (next_node_level == bound_level &&
+      user_cmp->Compare(max_key, Slice(left_bound_.data()+4, left_bound_.size()-4)) <= 0)){
+      now_node_ = next_node_;
+      //std::cout<<"max_key < left_bound"<<std::endl;
+      continue;
+    }else if( next_node_level > bound_level || (next_node_level == bound_level &&
+      user_cmp->Compare(min_key, Slice(right_bound.data()+4, right_bound.size()-4)) >= 0)){
+      next_node_ = now_node_;
+      SetLeftBound(right_bound);
+      //std::cout<<"right_bound < min_key"<<std::endl;
+      return nullptr;
+    }else{//[todo] need to delete
+      bool flag = false;
+      assert(flag);
+      //std::cout<<"another case"<<std::endl;
+      now_node_ = next_node_;
+      continue;
+    }
   }
 }
 
@@ -469,6 +510,24 @@ Node* SkipListBase::FindGreaterOrEqual(const Slice& key, Node** prev) const {
   }
 }
 
+Node* SkipListBase::FindLessThan(const Slice& key) const {
+  Node* x = head_;
+  int level = GetMaxHeight() - 1;
+  while (true) {
+    assert(x == head_ || compare_.Compare(x->GetKV()->key(), key) < 0);
+    Node* next = x->Next(level);
+    if (next == nullptr || compare_.Compare(next->GetKV()->key(), key) >= 0) {
+      if (level == 0) {
+        return x;
+      } else {
+        // Switch to next list
+        level--;
+      }
+    } else {
+      x = next;
+    }
+  }
+}
 
 bool SkipListBase::KeyIsAfterNode(const Slice& key, Node* n) const {
   // null n is considered infinite
@@ -529,6 +588,12 @@ class SkipListLRUCache {
 
     //[todo] ~CacheIterator() {}?
     // Returns true iff the iterator is positioned at a valid node.
+    ~CacheIterator(){
+      if(now_node_ != nullptr){
+        cache_->Unref(now_node_);
+      }
+    }
+
     bool Valid() const override{
       return list_cache_.Valid();
     }
@@ -538,14 +603,6 @@ class SkipListLRUCache {
     // Advances to the next position.
     // REQUIRES: Valid()
     void Next() override{
-      assert(Valid());
-      list_cache_.Next();
-      cache_->Unref(now_node_); //[todo] or Release?
-      cache_->Erase(now_node_->GetKV()->key());
-      if(list_cache_.Valid()){
-        now_node_ = list_cache_.node();
-        cache_->Ref(now_node_);
-      }
     }
 
     // Advance to the first entry with a key >= target
@@ -560,11 +617,11 @@ class SkipListLRUCache {
     // Position at the first entry in list.
     // Final state of iterator is Valid() iff list is not empty.
     void SeekToFirst() override{
-      list_cache_.SeekToFirst();
+      /*list_cache_.SeekToFirst();
       if(list_cache_.Valid()){
         now_node_ = list_cache_.node();
         cache_->Ref(now_node_);
-      }
+      }*/
     }
 
     void SeekToLast() override{}
@@ -584,15 +641,21 @@ class SkipListLRUCache {
 
     /*void* node() override{
       assert(Valid());
-      cache_->Ref(now_node_);
+      cache_->Ref(next_node_);
       return list_cache_.node();
     }*/
 
     void* TestAndReturn(Slice right_bound) override{
+      //MutexLock l(&cache_->mutex_);
       assert(Valid());
+      Node* last_node = now_node_;
       Node* node = list_cache_.TestAndReturn(right_bound);
-      if(node != nullptr){
-        cache_->Ref(node);
+      if(node != nullptr && node != now_node_){
+        cache_->Ref(node); //one for iter
+        cache_->Ref(node); //one for return
+        now_node_ = node;
+        cache_->Unref(last_node);//for iter
+        cache_->Erase(last_node->GetKV()->key());
         return node;
       } 
       return node;
@@ -648,6 +711,11 @@ SkipListLRUCache::SkipListLRUCache(const Comparator* user_cmp) :
 }
 
 SkipListLRUCache::~SkipListLRUCache() {
+  int num=0;
+  for(Node* e = in_use_.cache_next; e != &in_use_;) {
+    num++;
+  }
+  std::cout<<"in_use_:"<<num<<std::endl; 
   assert(in_use_.cache_next == &in_use_);  // Error if caller has an unreleased handle
   for (Node* e = lru_.cache_next; e != &lru_;) {
     Node* next = e->cache_next;

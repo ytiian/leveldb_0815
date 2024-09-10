@@ -323,14 +323,14 @@ Iterator* Table::NewIterator(const ReadOptions& options) const {
 Iterator* Table::NewIterator(const ReadOptions& options, 
     const Slice& left_bound, const Slice& right_bound, const int& level) const {
   Cache* block_cache = rep_->options.block_cache;
-  Iterator* cache_iter = block_cache->NewIterator(left_bound);
   char cache_key_buffer[sizeof(uint32_t) + left_bound.size()];
   EncodeFixed32(cache_key_buffer, level); 
   memcpy(cache_key_buffer + sizeof(uint32_t), left_bound.data(), left_bound.size());  
   Slice key(cache_key_buffer, sizeof(cache_key_buffer));
+  Iterator* cache_iter = block_cache->NewIterator(key);
   cache_iter->Seek(key);
   //std::cout<<"cache_iter valid:"<<cache_iter->Valid()<<std::endl;
-  //std::cout<<"cache_iter sst bound:"<< left_bound.ToString() <<" " << right_bound.ToString() <<std::endl;
+  //std::cout<<"cache_iter seek:"<< key.ToString() <<std::endl;
   //[todo] Cleanup?
   return NewTwoLevelIterator(
       rep_->index_block->NewIterator(rep_->options.comparator, false, right_bound), cache_iter, level,
@@ -478,16 +478,21 @@ Iterator* Table::BlockReadFromStoreOrCache(void* arg, const ReadOptions& options
   Slice largest_key = (cmp->Compare(index_key, right_bound) < 0) ? index_key : right_bound;
           //std::cout << "largest result:" << largest_key.ToString()<< std::endl;
           //std::cout<<"cache_iter valid:"<<cache_iter->Valid()<<std::endl;
+  char cache_key_buffer[sizeof(uint32_t) + largest_key.size()];
+  EncodeFixed32(cache_key_buffer, level); 
+  memcpy(cache_key_buffer + sizeof(uint32_t), largest_key.data(), largest_key.size());  
+  Slice largest(cache_key_buffer, sizeof(cache_key_buffer)); 
+  
   Iterator* iter;
   if(cache_iter->Valid()){
-    cache_handle = reinterpret_cast<Cache::Handle*>(cache_iter->TestAndReturn(largest_key));
+    cache_handle = reinterpret_cast<Cache::Handle*>(cache_iter->TestAndReturn(largest));
   }
   if(cache_handle != nullptr){
     block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
     iter = block->NewIterator(cmp, true);
     iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
     iter->SetIfCache();
-    cache_iter->Next();
+    //cache_iter->Next();
   } else{
     //[todo] no need to insert
     iter = table->BlockReaderWithoutCache(table, options, index_value, level, nullptr, Slice(), CallerType::kCompaction);
