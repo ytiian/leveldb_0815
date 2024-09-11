@@ -51,6 +51,7 @@ class TwoLevelIterator : public Iterator {
     assert(Valid());
     return data_iter_.key();
   }
+
   Slice value() const override {
     assert(Valid());
     return data_iter_.value();
@@ -67,6 +68,7 @@ class TwoLevelIterator : public Iterator {
   }
 
   bool IfCache() override{
+    assert(Valid());
     return data_iter_.IfCache();
   }
 

@@ -22,7 +22,7 @@
 namespace leveldb {
 
 struct TableBuilder::Rep {
-  Rep(const Options& opt, WritableFile* f, const uint32_t& level, const bool& if_cache, 
+  Rep(const Options& opt, WritableFile* f, const uint32_t& level, const bool& is_compaction_output, 
                             const uint64_t& file_number, L0_Reminder* l0_reminder)
       : options(opt),
         index_block_options(opt),
@@ -33,7 +33,8 @@ struct TableBuilder::Rep {
         num_entries(0),
         closed(false),
         level_(level),
-        if_cache_(if_cache),
+        is_compaction_output_(is_compaction_output),
+        from_cache_(false),
         l0_reminder_(l0_reminder),
         file_number_(file_number),
         filter_block(opt.filter_policy == nullptr
@@ -53,7 +54,8 @@ struct TableBuilder::Rep {
   BlockBuilder index_block;
   const uint32_t level_;
   const uint64_t file_number_;
-  const bool if_cache_;
+  const bool is_compaction_output_;
+  bool from_cache_;
   std::string last_key;
   int64_t num_entries;
   bool closed;  // Either Finish() or Abandon() has been called.
@@ -76,9 +78,9 @@ struct TableBuilder::Rep {
 };
 
 TableBuilder::TableBuilder(const Options& options, WritableFile* file, 
-                          const uint32_t& level, const bool& if_cache,
+                          const uint32_t& level, const bool& is_compaction_output_,
                           const uint64_t& file_number, L0_Reminder* l0_reminder)
-    : rep_(new Rep(options, file, level, if_cache, file_number, l0_reminder)) {
+    : rep_(new Rep(options, file, level, is_compaction_output_, file_number, l0_reminder)) {
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
@@ -88,6 +90,14 @@ TableBuilder::~TableBuilder() {
   assert(rep_->closed);  // Catch errors where caller forgot to call Finish()
   delete rep_->filter_block;
   delete rep_;
+}
+
+bool TableBuilder::IfFromCache(){
+  return rep_-> from_cache_;
+}
+
+void TableBuilder::SetFromCache() {
+  rep_-> from_cache_ = true;
 }
 
 Status TableBuilder::ChangeOptions(const Options& options) {
@@ -203,7 +213,8 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
   assert(ok());
   Rep* r = rep_;
   Slice raw = block->Finish();
-  if(r->if_cache_ && is_data_block){
+  if(r->is_compaction_output_ && is_data_block && r->from_cache_){
+    //std::cout<<"Insert compaction output block to cache"<<std::endl;
     char* buf = new char[raw.size()];
     memcpy(buf, raw.data(), raw.size());
     Slice block_contents(buf, raw.size());
@@ -226,6 +237,9 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
       block_cache->Release(cache_handle);
     }
   }
+  /*else{
+    std::cout<<"Not insert compaction output block to cache"<<std::endl;
+  }*/
 
   Slice block_contents;
   CompressionType type = r->options.compression;
@@ -266,6 +280,7 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
   }
   WriteRawBlock(block_contents, type, handle, is_data_block); 
   r->compressed_output.clear();
+  r->from_cache_ = false;
   block->Reset();
 }
 

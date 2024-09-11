@@ -128,6 +128,11 @@ class MergingIterator : public Iterator {
     return status;
   }
 
+  bool IfCache() override{
+    assert(Valid());
+    return current_->IfCache();
+  }
+
  private:
   // Which direction is the iterator moving?
   enum Direction { kForward, kReverse };

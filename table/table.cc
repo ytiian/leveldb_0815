@@ -247,7 +247,7 @@ Iterator* Table::BlockReaderWithoutCache(void* arg, const ReadOptions& options,
           }else{
             iter->RegisterCleanup(&DeleteBlock, block, nullptr);
           }
-          block_cache -> IncrementCacheInsert(caller_type);
+          //block_cache -> IncrementCacheInsert(caller_type);
         }
       }
     } 
@@ -411,6 +411,7 @@ Status Table::GetWithOffset(const ReadOptions& options, const Slice& k, void* ar
   s = ReadBlock(rep_->file, options, handle, &contents);
   if (s.ok()) {
     block = new Block(contents);
+    block_cache -> IncrementCacheMisses(CallerType::kGet);
     if (contents.cachable && options.fill_cache) {//contents.cachable && options.fill_cache
       // std::cout<<"insertL0"<<std::endl;
       cache_handle = block_cache->Insert(cache_key, block, block->size(),
@@ -491,8 +492,8 @@ Iterator* Table::BlockReadFromStoreOrCache(void* arg, const ReadOptions& options
     block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
     iter = block->NewIterator(cmp, true);
     iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
-    iter->SetIfCache();
-    //cache_iter->Next();
+    assert(iter->IfCache());
+    //iter->SetIfCache();
   } else{
     //[todo] no need to insert
     iter = table->BlockReaderWithoutCache(table, options, index_value, level, nullptr, Slice(), CallerType::kCompaction);

@@ -39,6 +39,7 @@ Status NotL0Get(int level, const Slice& k, void* arg, Cache* block_cache, const 
     cache_handle = block_cache->Lookup(key); // return LRUHandle*
     if (cache_handle != nullptr) {
       //std::cout<<"Lookup1"<<std::endl;
+      block_cache -> IncrementCacheHits(CallerType::kGet);
       block = reinterpret_cast<Block*>(block_cache->Value(cache_handle)); //Value(cache_handle) : return reinterpret_cast<LRUHandle*>(handle)->value; (void*)
     }
   } 
@@ -85,6 +86,7 @@ Status L0Get(const ReadOptions& options, const Slice& k, void* arg, const Slice&
     cache_handle = block_cache->Lookup(key); 
     if (cache_handle != nullptr) {  //Lookup has already performed an equality check internally
       //std::cout<<"Lookup2"<<std::endl;
+      block_cache -> IncrementCacheHits(CallerType::kGet);
       block = reinterpret_cast<Block*>(block_cache->Value(cache_handle)); //Value(cache_handle) : return reinterpret_cast<LRUHandle*>(handle)->value; (void*)
       io_flag = false;
       

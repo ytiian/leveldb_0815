@@ -1065,6 +1065,10 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         compact->current_output()->smallest.DecodeFrom(key);
       }
       compact->current_output()->largest.DecodeFrom(key);
+      //std::cout<<"ifcache:"<<compact->builder->IfFromCache()<<" "<<input->IfCache()<<std::endl;
+      if(!compact->builder->IfFromCache() && input->IfCache()){
+        compact->builder->SetFromCache();
+      }
       compact->builder->Add(key, input->value());
 
       // Close output file if it is big enough

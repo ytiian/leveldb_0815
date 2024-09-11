@@ -672,7 +672,7 @@ class SkipListLRUCache {
           now_node_ = node;
           cache_->Unref(last_node);//for iter          
         }
-        cache_->Erase(last_node->GetKV()->key());
+        //cache_->Erase(last_node->GetKV()->key());
         return node;
       } 
       return nullptr;

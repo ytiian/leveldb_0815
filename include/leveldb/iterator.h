@@ -76,8 +76,6 @@ class LEVELDB_EXPORT Iterator {
     return nullptr;
   }*/
 
-  virtual void SetIfCache(){}
-
   virtual bool IfCache(){
     return false;
   }

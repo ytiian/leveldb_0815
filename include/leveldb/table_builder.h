@@ -32,7 +32,7 @@ class LEVELDB_EXPORT TableBuilder {
   // building in *file.  Does not close the file.  It is up to the
   // caller to close the file after calling Finish().
   TableBuilder(const Options& options, WritableFile* file, const uint32_t& level = 0, 
-             const bool& if_cache = false, const uint64_t& file_number = 0, L0_Reminder* reminder = nullptr);
+             const bool& is_compaction_output_ = false, const uint64_t& file_number = 0, L0_Reminder* reminder = nullptr);
 
   TableBuilder(const TableBuilder&) = delete;
   TableBuilder& operator=(const TableBuilder&) = delete;
@@ -82,6 +82,10 @@ class LEVELDB_EXPORT TableBuilder {
   // Size of the file generated so far.  If invoked after a successful
   // Finish() call, returns the size of the final generated file.
   uint64_t FileSize() const;
+
+  bool IfFromCache();
+
+  void SetFromCache();
 
  private:
   bool ok() const { return status().ok(); }
