@@ -197,6 +197,7 @@ target_sources(leveldb
     "util/status.cc"
     "util/zipf.h"
     "util/skiplist_cache.cc"
+    "util/aligned_buffer.h"
 
   # Only CMake 3.3+ supports PUBLIC sources in targets exported by "install".
   $<$<VERSION_GREATER:CMAKE_VERSION,3.2>:PUBLIC>
