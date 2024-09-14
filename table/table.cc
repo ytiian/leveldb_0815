@@ -399,8 +399,8 @@ Status Table::InternalGetByIO(const ReadOptions& options, const Slice& k, void* 
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
     } else {
-      while(saver->status[level].load(std::memory_order_relaxed) == SEARCH_BEGIN_CACHE_SEARCH){}
-      if(saver->status[level].load(std::memory_order_relaxed) == SEARCH_NEED_IO){
+      while(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_BEGIN_CACHE_SEARCH){}
+      if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NEED_IO){
         //std::cout<<"start read block"<<std::endl;
         Iterator* block_iter = BlockReaderWithoutCache(this, options, iiter->value(), level, ucmp, k, CallerType::kGet);
         block_iter->Seek(k);

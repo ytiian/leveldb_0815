@@ -334,11 +334,11 @@ void Version::ThreadA_ReadUseIO(Slice user_key, Slice internal_key, void* arg,
       if(stop){
         return;
       }
-      if (s->status[level].load(std::memory_order_relaxed) == SEARCH_NOT_FOUND) {
+      if (s->status[level].load(std::memory_order_seq_cst) == SEARCH_NOT_FOUND) {
             continue;
       }
       
-      s->status[level].store(SEARCH_BEGIN_CACHE_SEARCH, std::memory_order_relaxed);
+      s->status[level].store(SEARCH_BEGIN_CACHE_SEARCH, std::memory_order_seq_cst);
  
       /*if (level == 1) {
         while (true) {
@@ -384,12 +384,12 @@ void Version::ThreadB_ReadFromCache(void* arg, bool (*ReadFromCache)(void*, int,
     if(stop){
       return;
     }
-    if (s->status[level].load(std::memory_order_relaxed) == SEARCH_NOT_FOUND) {
+    if (s->status[level].load(std::memory_order_seq_cst) == SEARCH_NOT_FOUND) {
           continue;
     }
 
     
-    while(s->status[level].load(std::memory_order_relaxed) != SEARCH_BEGIN_CACHE_SEARCH){
+    while(s->status[level].load(std::memory_order_seq_cst) != SEARCH_BEGIN_CACHE_SEARCH){
       if(stop){
         return;
       }
@@ -400,15 +400,15 @@ void Version::ThreadB_ReadFromCache(void* arg, bool (*ReadFromCache)(void*, int,
     //std::cout<<"search cache:" << level << std::endl;
     if (!(*ReadFromCache)(arg, level, &if_search)) {
         //std::cout<<"find cache:" << level << std::endl;
-        s->status[level].store(SEARCH_FOUND, std::memory_order_relaxed);
+        s->status[level].store(SEARCH_FOUND, std::memory_order_seq_cst);
         stop = true;
         return;
     }
 
     if (if_search) {
-        s->status[level].store(SEARCH_NOT_FOUND, std::memory_order_relaxed);
+        s->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
     }else{
-        s->status[level].store(SEARCH_NEED_IO, std::memory_order_relaxed);
+        s->status[level].store(SEARCH_NEED_IO, std::memory_order_seq_cst);
     }
   }
 }
