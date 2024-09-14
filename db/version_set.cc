@@ -328,6 +328,10 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
   //PrintLast64Bits(internal_key.ToString());
   const Comparator* ucmp = vset_->icmp_.user_comparator();
   for (int level = 1; level < config::kNumLevels; level++){
+    size_t num_files = files_[level].size();
+    if (num_files == 0) continue;
+    // Binary search to find earliest index whose largest key >= internal_key.
+
     bool if_search = false;
     if(!(*ReadFromCache)(arg, level, &if_search)){
       return;
@@ -356,15 +360,14 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
         }
       }
     }
-    size_t num_files = files_[level].size();
-    // Binary search to find earliest index whose largest key >= internal_key.
+
     uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);
         
     if (index < num_files) {
       FileMetaData* f = files_[level][index];
       if (ucmp->Compare(user_key, f->smallest.user_key()) < 0) {
-        // All of "f" is past any data for user_key
-      } else {
+        continue;
+      }else{
         if (!(*ReadUseIO)(arg, level, f, ucmp)) { //false means stop searching
           return;
         }
@@ -372,6 +375,7 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
     }
   }
 }
+
 Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, std::string* value, 
         const Slice& reminder_result){
   Saver saver;
