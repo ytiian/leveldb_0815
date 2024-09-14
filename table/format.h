@@ -5,6 +5,12 @@
 #ifndef STORAGE_LEVELDB_TABLE_FORMAT_H_
 #define STORAGE_LEVELDB_TABLE_FORMAT_H_
 
+#define SEARCH_NOT_FOUND -1
+#define SEARCH_NO_STATUS 0
+#define SEARCH_FOUND 1
+#define SEARCH_NEED_IO 2
+#define SEARCH_BEGIN_CACHE_SEARCH 3
+
 #include <cstdint>
 #include <string>
 

@@ -40,6 +40,8 @@ namespace leveldb {
 
 const int kNumNonTableCacheFiles = 10;
 
+int num_read_threads=1;
+
 // Information kept for every waiting writer
 struct DBImpl::Writer {
   explicit Writer(port::Mutex* mu)
@@ -159,6 +161,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       tmp_batch_(new WriteBatch),
       background_compaction_scheduled_(false),
       manual_compaction_(nullptr),
+      thpool(NULL),
       versions_(new VersionSet(dbname_, &options_, table_cache_,
                                &internal_comparator_)) {}
 
@@ -1222,7 +1225,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
       s = current->GetWithReminder(options, lkey, value, reminder_result);  
       l0_reminder_->Release(result);
     } else {
-      s = current->Get(options, lkey, value, &stats);
+      s = current->Get(options, lkey, value, &stats, thpool);
       have_stat_update = true;
     }
     mutex_.Lock();
@@ -1578,6 +1581,11 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   DBImpl* impl = new DBImpl(options, dbname);
   impl->mutex_.Lock();
   VersionEdit edit;
+
+  if(!impl->thpool){
+    impl->thpool = thpool_init(num_read_threads);
+  }
+
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);

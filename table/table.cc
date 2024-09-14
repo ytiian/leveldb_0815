@@ -17,6 +17,7 @@
 #include "table/pass_cache_iterator.h"
 #include "util/coding.h"
 #include "leveldb/comparator.h"
+#include "db/dbformat.h"
 #include <iostream>
 
 namespace leveldb {
@@ -367,10 +368,27 @@ Iterator* Table::NewIterator(const ReadOptions& options,
   return s;
 }*/
 
+namespace {
+enum SaverState {
+  kNotFound,
+  kFound,
+  kDeleted,
+  kCorrupt,
+};
+struct Saver {
+  SaverState state;
+  const Comparator* ucmp;
+  Slice user_key;
+  std::string* value;
+  std::atomic<int> status[config::kNumLevels];
+};
+}  // namespace
+
 Status Table::InternalGetByIO(const ReadOptions& options, const Slice& k, void* arg, const int& level, const Comparator* ucmp,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)){
   Status s;
+  Saver* saver = reinterpret_cast<Saver*>(arg);
   Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
   iiter->Seek(k);
   if (iiter->Valid()) {
@@ -381,13 +399,17 @@ Status Table::InternalGetByIO(const ReadOptions& options, const Slice& k, void* 
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
     } else {
-      Iterator* block_iter = BlockReaderWithoutCache(this, options, iiter->value(), level, ucmp, k, CallerType::kGet);
-      block_iter->Seek(k);
-      if (block_iter->Valid()) {
-        (*handle_result)(arg, block_iter->key(), block_iter->value());
+      while(saver->status[level].load(std::memory_order_relaxed) == SEARCH_BEGIN_CACHE_SEARCH){}
+      if(saver->status[level].load(std::memory_order_relaxed) == SEARCH_NEED_IO){
+        //std::cout<<"start read block"<<std::endl;
+        Iterator* block_iter = BlockReaderWithoutCache(this, options, iiter->value(), level, ucmp, k, CallerType::kGet);
+        block_iter->Seek(k);
+        if (block_iter->Valid()) {
+          (*handle_result)(arg, block_iter->key(), block_iter->value());
+        }
+        s = block_iter->status();
+        delete block_iter;      
       }
-      s = block_iter->status();
-      delete block_iter;
     }
   }
   if (s.ok()) {

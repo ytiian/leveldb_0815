@@ -198,6 +198,14 @@ target_sources(leveldb
     "util/zipf.h"
     "util/skiplist_cache.cc"
     "util/aligned_buffer.h"
+    "util/thpool.h"
+    "util/thpool.cc"
+    "util/affinity.h"
+    "util/lsm_mutex.h"
+    "util/cpumap.h"
+    "util/defs.h"
+    "util/cpumap.cc"
+    "util/bitops.h"
 
   # Only CMake 3.3+ supports PUBLIC sources in targets exported by "install".
   $<$<VERSION_GREATER:CMAKE_VERSION,3.2>:PUBLIC>
@@ -293,6 +301,9 @@ endif(HAVE_TCMALLOC)
 # Needed by port_stdcxx.h
 find_package(Threads REQUIRED)
 target_link_libraries(leveldb Threads::Threads)
+
+find_library(NUMA_LIB numa)
+target_link_libraries(leveldb ${NUMA_LIB})
 
 add_executable(leveldbutil
   "db/leveldbutil.cc"
