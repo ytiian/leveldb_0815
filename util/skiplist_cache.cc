@@ -69,6 +69,7 @@ struct Node {
   Node* cache_next;
   Node* cache_prev;
   uint64_t charge;  
+  int height;
   bool in_cache;     // Whether entry is in the cache.
   uint32_t refs;     // References, including cache reference, if present.
 
@@ -695,7 +696,7 @@ class SkipListLRUCache {
   void Ref(Node* e);
   void Unref(Node* e);
   bool FinishErase(Node* e) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-
+  void InsertThread();
   // Initialized before use.
   uint64_t capacity_;
 
@@ -703,18 +704,29 @@ class SkipListLRUCache {
   mutable port::Mutex mutex_;
   uint64_t usage_ GUARDED_BY(mutex_);
 
+  mutable port::Mutex list_mutex_;
   // Dummy head of LRU list.
   // lru.prev is newest entry, lru.next is oldest entry.
   // Entries have refs==1 and in_cache==true.
-  Node lru_ GUARDED_BY(mutex_);
+  Node lru_ GUARDED_BY(list_mutex_);
 
   // Dummy head of in-use list.
   // Entries are in use by clients, and have refs >= 2 and in_cache==true.
-  Node in_use_ GUARDED_BY(mutex_);
+  Node in_use_ GUARDED_BY(list_mutex_);
 
   Arena arena_ GUARDED_BY(mutex_);
 
   SkipListBase table_ GUARDED_BY(mutex_);
+
+  std::thread insert_thread_;
+
+  std::queue<Node*> insert_queue_;
+
+  std::condition_variable queue_cv_;
+
+  std::mutex queue_mutex_;
+
+  std::atomic<bool> has_items{false};  
 
 };
 
@@ -725,6 +737,7 @@ SkipListLRUCache::SkipListLRUCache(const Comparator* user_cmp) :
   lru_.cache_prev = &lru_;
   in_use_.cache_next = &in_use_;
   in_use_.cache_prev = &in_use_;
+  insert_thread_ = std::thread(&SkipListLRUCache::InsertThread, this);
 }
 
 SkipListLRUCache::~SkipListLRUCache() {
@@ -762,16 +775,16 @@ void SkipListLRUCache::Unref(Node* e) {
     free(e);
   } else if (e->in_cache && e->refs == 1) {
     // No longer in use; move to lru_ list.
-    if(e->in_cache){
       LRU_Remove(e);
       LRU_Append(&lru_, e);
-    }
   }
 }
 
 void SkipListLRUCache::LRU_Remove(Node* e) {
-  e->cache_next->cache_prev = e->cache_prev;
-  e->cache_prev->cache_next = e->cache_next;
+  if(e->cache_next != nullptr){
+    e->cache_next->cache_prev = e->cache_prev;
+    e->cache_prev->cache_next = e->cache_next;
+  }
 }
 
 void SkipListLRUCache::LRU_Append(Node* list, Node* e) {
@@ -783,16 +796,22 @@ void SkipListLRUCache::LRU_Append(Node* list, Node* e) {
 }
 
 Cache::Handle* SkipListLRUCache::Lookup(const Slice& key) {
-  MutexLock l(&mutex_);
-  Node* e = table_.Lookup(key);
+  Node* e = nullptr;
+  {
+    MutexLock l(&mutex_);   
+    e = table_.Lookup(key);
+  }
   if (e != nullptr) {
-    Ref(e);
+    {
+      MutexLock l(&list_mutex_);
+      Ref(e);
+    }
   }
   return reinterpret_cast<Cache::Handle*>(e);
 }
 
 void SkipListLRUCache::Release(Cache::Handle* handle) {
-  MutexLock l(&mutex_);
+  MutexLock l(&list_mutex_);
   //std::cout<<"Release"<<std::endl;
   Unref(reinterpret_cast<Node*>(handle));
 }
@@ -802,8 +821,7 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
                                 void (*deleter)(const Slice& key,
                                                 void* value), const Slice& min_key, 
                                                         const uint64_t& file_number) {
-  MutexLock l(&mutex_);
-
+  //MutexLock l(&mutex_);
   KvWrapper* kv = 
         reinterpret_cast<KvWrapper*>(malloc(sizeof(KvWrapper) - 1 + key.size() + min_key.size()));
   kv->value = value;
@@ -821,42 +839,63 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
   e->deleter = deleter;
   e->charge = charge;
   e->refs = 1;  // for the returned handle. Unref by iter's RegisterCleanup
+  e->height = height;
+  e->in_cache = false;
   //std::cout<<"Insert"<<std::endl;
   if (capacity_ > 0) {
-    e->refs++;  // for the cache's reference.[LRU_Append]
-    e->in_cache = true;
-    LRU_Append(&in_use_, e);
-    usage_ += charge;
-    bool if_insert = table_.Insert(e, height);
-    //does not allow duplicate insertion, does not need to return and erase
-    //assert(if_insert);
-    if(!if_insert) {
-      //std::cout<<"Duplicate insertion"<<std::endl;
-      e->refs = 0;
-      e->in_cache = false;
-      LRU_Remove(e);
-      free(e);
-      usage_ -= charge;
-      return nullptr;
-    }
-  } else {  // don't cache. (capacity_==0 is supported and turns off caching.)
-    // next is read by key() in an assert, so it must be initialized
-    //e->next = nullptr;
-    //[todo] capacity_ == 0
-  }
-  /*if(kv->level() != 0){
-    std::cout<<"Insert: "<<kv->MaxKey().ToString()<<" "<<kv->FileNumber()<<std::endl;
-  }*/
-  while (usage_ > capacity_ && lru_.cache_next != &lru_) {
-    Node* old = lru_.cache_next;
-    assert(old->refs == 1);
-    bool erased = FinishErase(table_.Remove(old->GetKV()->key()));
-    if (!erased) {  // to avoid unused variable when compiled NDEBUG
-      assert(erased);
-    }
-  }
-
+    {
+      e->refs++;  // for the cache's reference.[LRU_Append]
+      std::unique_lock<std::mutex> lock(queue_mutex_); 
+      insert_queue_.push(e);
+      has_items.store(true, std::memory_order_release);
+    }  
+  } 
   return reinterpret_cast<Cache::Handle*>(e);
+}
+
+void SkipListLRUCache::InsertThread() {
+    while (true) {
+      if(has_items.load(std::memory_order_acquire)){
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        while (!insert_queue_.empty()) {
+            Node* e = insert_queue_.front();
+            insert_queue_.pop();
+            lock.unlock(); // 解锁以允许其他线程访问队列
+
+            {
+              MutexLock l(&list_mutex_);
+              e->in_cache = true;
+              if(e->refs == 1){
+                LRU_Append(&lru_, e);
+              }else{
+                LRU_Append(&in_use_, e);
+              }
+              usage_ += e->charge;
+            }
+            MutexLock l(&mutex_);
+            bool if_insert = table_.Insert(e, e->height);
+            //does not allow duplicate insertion, does not need to return and erase
+            //assert(if_insert);
+            if(!if_insert) {
+              //std::cout<<"Duplicate insertion"<<std::endl;
+              e->refs--;
+              e->in_cache = false;
+              usage_ -= e->charge;
+            }
+
+            while (usage_ > capacity_ && lru_.cache_next != &lru_) {
+              Node* old = lru_.cache_next;
+              assert(old->refs == 1);
+              bool erased = FinishErase(table_.Remove(old->GetKV()->key()));
+              if (!erased) {  // to avoid unused variable when compiled NDEBUG
+                assert(erased);
+              }
+            }        
+            lock.lock(); // 重新加锁以检查队列
+        }
+        has_items.store(false, std::memory_order_release);
+      }
+    }
 }
 
 Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
