@@ -20,6 +20,7 @@
 #include "util/coding.h"
 #include "util/logging.h"
 #include "db/memory_structure.h"
+#include "db/saver.h"
 
 namespace leveldb {
 
@@ -260,21 +261,7 @@ void Version::AddIterators(const ReadOptions& options,
 }
 
 // Callback from TableCache::Get()
-namespace {
-enum SaverState {
-  kNotFound,
-  kFound,
-  kDeleted,
-  kCorrupt,
-};
-struct Saver {
-  SaverState state;
-  const Comparator* ucmp;
-  Slice user_key;
-  std::string* value;
-  std::atomic<int> status[config::kNumLevels];
-};
-}  // namespace
+
 static void SaveValue(void* arg, const Slice& ikey, const Slice& v) {
   Saver* s = reinterpret_cast<Saver*>(arg);
   ParsedInternalKey parsed_key;

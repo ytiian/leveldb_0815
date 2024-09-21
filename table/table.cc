@@ -18,6 +18,7 @@
 #include "util/coding.h"
 #include "leveldb/comparator.h"
 #include "db/dbformat.h"
+#include "db/saver.h"
 #include <iostream>
 
 namespace leveldb {
@@ -368,36 +369,27 @@ Iterator* Table::NewIterator(const ReadOptions& options,
   return s;
 }*/
 
-namespace {
-enum SaverState {
-  kNotFound,
-  kFound,
-  kDeleted,
-  kCorrupt,
-};
-struct Saver {
-  SaverState state;
-  const Comparator* ucmp;
-  Slice user_key;
-  std::string* value;
-  std::atomic<int> status[config::kNumLevels];
-};
-}  // namespace
-
 Status Table::InternalGetByIO(const ReadOptions& options, const Slice& k, void* arg, const int& level, const Comparator* ucmp,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)){
   Status s;
   Saver* saver = reinterpret_cast<Saver*>(arg);
   Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NOT_FOUND){
+    return s;
+  }
   iiter->Seek(k);
   if (iiter->Valid()) {
     Slice handle_value = iiter->value();
     FilterBlockReader* filter = rep_->filter;
     BlockHandle handle;
+    if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NOT_FOUND){
+      return s;
+    }
     if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
+      saver->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
     } else {
       while(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_BEGIN_CACHE_SEARCH){}
       if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NEED_IO){

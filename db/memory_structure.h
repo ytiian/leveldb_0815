@@ -12,6 +12,7 @@
 #include "util/hash.h"
 #include "db/version_edit.h"
 #include "leveldb/table.h"
+#include "db/saver.h"
 
 namespace leveldb {
 
@@ -26,10 +27,14 @@ Status NotL0Get(int level, const Slice& k, void* arg, Cache* block_cache, const 
                        void (*handle_result)(void*, const Slice&,
                                              const Slice&)){
   Status s;
+  Saver* saver = reinterpret_cast<Saver*>(arg);
   Block* block = nullptr;
   Cache::Handle* cache_handle = nullptr;
 
   if (block_cache != nullptr) {
+    if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NOT_FOUND){
+      return s;
+    }
     size_t key_len = k.size();
     char cache_key_buffer[sizeof(uint32_t) + key_len];
     EncodeFixed32(cache_key_buffer, level); 
