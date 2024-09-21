@@ -327,6 +327,25 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
   //std::cout<<internal_key.ToString()<<std::endl;
   //PrintLast64Bits(internal_key.ToString());
   const Comparator* ucmp = vset_->icmp_.user_comparator();
+  //level 1
+  while(true) {
+    FileMetaData* f = nullptr;
+    {
+      std::unique_lock<std::mutex> lock(interState_files_mutex_);
+      if(interState_files_.empty()) {
+        break;
+      }
+      f = interState_files_.front();
+      interState_files_.pop();
+    }
+    if(ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0){ 
+      continue;
+    }
+    if (!(*ReadUseIO)(arg, 1, f, ucmp)) { //false means stop searching
+      return;
+    }
+  }
+
   for (int level = 1; level < config::kNumLevels; level++){
     size_t num_files = files_[level].size();
     if (num_files == 0) continue;
@@ -339,26 +358,6 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
     //std::cout<<if_search<<std::endl;
     if(if_search){
       continue;
-    }
-
-    if(level == 1){
-      while(true) {
-        FileMetaData* f = nullptr;
-        {
-          std::unique_lock<std::mutex> lock(interState_files_mutex_);
-          if(interState_files_.empty()) {
-            break;
-          }
-          f = interState_files_.front();
-          interState_files_.pop();
-        }
-        if(ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0){ 
-          continue;
-        }
-        if (!(*ReadUseIO)(arg, level, f, ucmp)) { //false means stop searching
-          return;
-        }
-      }
     }
 
     uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);

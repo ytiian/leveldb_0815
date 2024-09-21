@@ -231,16 +231,13 @@ Iterator* Table::BlockReaderWithoutCache(void* arg, const ReadOptions& options,
           memcpy(cache_key_buffer + sizeof(uint32_t), max_key.data(), max_key.size());
           Slice cache_key(cache_key_buffer, sizeof(cache_key_buffer));
 
-          //[todo] test compaction, need to delete
-          /*if(ucmp == nullptr){
-            cache_handle = block_cache->Insert(cache_key, block, block->size(),
-                                    &DeleteCachedBlock, min_key);
-          }*/
-
           if(ucmp != nullptr && ucmp->Compare(Slice(min_key.data(), min_key.size() - 8), Slice(k.data(), k.size() - 8)) <= 0 
               && ucmp->Compare(Slice(max_key.data(), max_key.size() - 8), Slice(k.data(), k.size() - 8)) >= 0){
             cache_handle = block_cache->Insert(cache_key, block, block->size(),
                                                 &DeleteCachedBlock, min_key, table->rep_->file_number);
+          }else{
+            delete block;
+            return nullptr;
           }
           if(cache_handle != nullptr){
             iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
@@ -382,12 +379,14 @@ Status Table::InternalGetByIO(const ReadOptions& options, const Slice& k, void* 
       // Not found
     } else {
       Iterator* block_iter = BlockReaderWithoutCache(this, options, iiter->value(), level, ucmp, k, CallerType::kGet);
-      block_iter->Seek(k);
-      if (block_iter->Valid()) {
-        (*handle_result)(arg, block_iter->key(), block_iter->value());
+      if(block_iter != nullptr){
+        block_iter->Seek(k);
+        if (block_iter->Valid()) {
+          (*handle_result)(arg, block_iter->key(), block_iter->value());
+        }
+        s = block_iter->status();
+        delete block_iter;      
       }
-      s = block_iter->status();
-      delete block_iter;
     }
   }
   if (s.ok()) {
