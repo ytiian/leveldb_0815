@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "folly/ConcurrentSkipList.h"
+
 #include "port/port.h"
 #include "port/thread_annotations.h"
 #include "util/hash.h"
@@ -18,6 +20,7 @@
 #include "util/random.h"
 #include "util/coding.h"
 #include "db/dbformat.h"
+
 
 namespace leveldb {
 
@@ -69,49 +72,47 @@ struct Node {
   Node* cache_next;
   Node* cache_prev;
   uint64_t charge;  
-  int height;
   bool in_cache;     // Whether entry is in the cache.
   uint32_t refs;     // References, including cache reference, if present.
 
-  Node() : deleter(nullptr), cache_next(nullptr), cache_prev(nullptr), charge(0), in_cache(false), refs(0), kv(nullptr) {
-    next_[0].store(nullptr, std::memory_order_relaxed);
+//  KvWrapper* kv = 
+//        reinterpret_cast<KvWrapper*>(malloc(sizeof(KvWrapper) - 1 + key.size() + min_key.size()));
+  Node(Slice key): deleter(nullptr), cache_next(nullptr), cache_prev(nullptr), charge(0), in_cache(false), refs(0) {
+    kv = reinterpret_cast<KvWrapper*>(malloc(sizeof(KvWrapper) - 1 + key.size()));
+    std::memcpy(kv->data, key.data(), key.size());
+    kv->cache_key_length = key.size();
   }
+
+  Node() : deleter(nullptr), cache_next(nullptr), cache_prev(nullptr), charge(0), in_cache(false), refs(0), kv(nullptr) {}
 
   explicit Node(KvWrapper* h):kv(h) { }
-
-  Node* Next(int n) {
-    assert(n >= 0);
-    return next_[n].load(std::memory_order_acquire);
-  }
-  void SetNext(int n, Node* x) {
-    assert(n >= 0);
-    next_[n].store(x, std::memory_order_release);
-  }
-
-  Node* NoBarrier_Next(int n) {
-    assert(n >= 0);
-    return next_[n].load(std::memory_order_relaxed);
-  }
-  void NoBarrier_SetNext(int n, Node* x) {
-    assert(n >= 0);
-    next_[n].store(x, std::memory_order_relaxed);
-  }
 
   KvWrapper* GetKV(){
     return kv;
   }
 
+  KvWrapper* GetKV() const{
+    return kv;
+  }
+
+  ~Node() {
+    if (kv != nullptr) {
+        free(kv);  // 释放通过 malloc 动态分配的 kv 空间
+        kv = nullptr;
+    }
+  }
+
  private:
   KvWrapper* kv; //Actual stored objects
-  std::atomic<Node*> next_[1];
 };
-
 
 /************************************************ */
 class CacheComparator : public Comparator {
 
  public:
   const InternalKeyComparator internal_comparator_;
+  //[todo] is correct?
+  explicit CacheComparator() : internal_comparator_(BytewiseComparator()) {};
   explicit CacheComparator(const Comparator* c) : internal_comparator_(c) {}
   const char* Name() const override;
   int Compare(const Slice& a, const Slice& b) const override;
@@ -120,7 +121,7 @@ class CacheComparator : public Comparator {
   void FindShortSuccessor(std::string* key) const override;//to do
   int UserCompare(const Slice& akey, const Slice& bkey) const;
   const Comparator* user_comparator() const { return internal_comparator_.user_comparator(); }
-
+  bool operator()(Node* const& lhs, Node* const& rhs) const;
 };
 
 const char* CacheComparator::Name() const { 
@@ -166,6 +167,16 @@ void CacheComparator::FindShortestSeparator(std::string* start,
 
 void CacheComparator::FindShortSuccessor(std::string* key) const {}
 
+bool CacheComparator::operator()(Node* const& lhs, Node* const& rhs) const{
+  return Compare(lhs->GetKV()->key(), rhs->GetKV()->key()) < 0;
+}
+
+using SkipListT = folly::ConcurrentSkipList<Node*, CacheComparator>;
+using SkipListAccessor = SkipListT::Accessor;
+using SkipListSkipper = SkipListT::Skipper;
+
+/************************************************ */
+//wrapper for SkipListT
 class SkipListBase { //Skiplist
  public:
   explicit SkipListBase(CacheComparator cmp, Arena* arena);
@@ -173,109 +184,30 @@ class SkipListBase { //Skiplist
   SkipListBase(const SkipListBase&) = delete;
   SkipListBase& operator=(const SkipListBase&) = delete;
 
-  // Iteration over the contents of a skip list
-  class Iterator {
-   public:
-    // Initialize an iterator over the specified list.
-    // The returned iterator is not valid.
-    explicit Iterator(const SkipListBase* list, const Slice& left_bound,const uint64_t& file_number);
-
-    // Returns true iff the iterator is positioned at a valid node.
-    bool Valid() const;
-
-    // Returns the key at the current position.
-    // REQUIRES: Valid()
-    Node* node() const;
-
-    // Advances to the next position.
-    // REQUIRES: Valid()
-    void Next();
-
-    // Advances to the previous position.
-    // REQUIRES: Valid()
-    //void Prev();
-
-    // Advance to the first entry with a key >= target
-    void Seek(const Slice& target);
-
-    // Position at the first entry in list.
-    // Final state of iterator is Valid() iff list is not empty.
-    void SeekToFirst();
-
-    // Position at the last entry in list.
-    // Final state of iterator is Valid() iff list is not empty.
-    //void SeekToLast();
-
-    Slice key() const;
-
-    Node* TestAndReturn(Slice right_bound);
-
-   private:
-    const SkipListBase* list_;
-    Node* now_node_;
-    Node* next_node_;
-    const uint64_t expected_file_;
-    Slice left_bound_;
-    std::vector<char> left_bound_data_;
-
-    void SetLeftBound(const Slice& left_bound){
-      left_bound_data_.resize(left_bound.size());
-      memcpy(left_bound_data_.data(), left_bound.data(), left_bound.size());
-      left_bound_ = Slice(left_bound_data_.data(), left_bound.size());
-    }
-    // Intentionally copyable
-  };
-
-/*void PrintLast64Bits(const std::string& str) {
-  if (str.size() < 8) {
-          std::cerr << "The string is too short to have 64 bits." << std::endl;
-          return;
-      }
-
-      uint64_t result = 0; // 用于存储56位的结果
-      for (size_t i = str.size() - 8; i < str.size(); ++i) {
-          unsigned char byte = str[i];
-          unsigned char high_7_bits = byte >> 1; // 提取高7位
-          result = (result << 7) | high_7_bits; // 将高7位拼接到结果中
-      }
-
-      std::cout << "The 56-bit number in decimal: " << result << std::endl;
-}*/
 
   Node* Lookup(const Slice& key) { 
-    Node* x = FindGreaterOrEqual(key, nullptr);
+    Node* x = nullptr;
     int key_level = DecodeFixed32(key.data());
+
+    SkipListAccessor accessor(sl_);
+    Node tmp(key);
+    SkipListT::iterator iter = accessor.lower_bound(&tmp);
+    if(iter != accessor.end()){
+      x = *iter;
+    }
+
     if(x != nullptr && key_level == 0){
       if(Equal(key, x->GetKV()->key())){//Accurate search in L0
         return x;
       }
       x = nullptr;
-    }
+    }    
 
     if(x != nullptr && key_level != 0){
       Slice key_target = Slice(key.data() + 4, key.size() - 4);
       Slice cache_key = x->GetKV()->key();
       int cache_level = DecodeFixed32(cache_key.data());
-      
-      /*if(cache_level == key_level){
-        std::cout<<"Level MATCH!!!"<<std::endl;
-      }
-      if(compare_.internal_comparator_.Compare(key_target, x->GetKV()->MaxKey()) <= 0){
-        std::cout<<"MaxKey MATCH!!!"<<std::endl;
-      }
-      if(compare_.internal_comparator_.Compare(key_target, x->GetKV()->MinKey()) >= 0){
-        std::cout<<"MinKey MATCH!!!"<<std::endl;
-      }
-      std::cout<<"*************************"<<std::endl<<std::endl;*/
-      /*std::cout<<"Lookup: cache_level "<<cache_level<<"; key_level "<<key_level<<std::endl;
-      std::cout<<"Lookup: key_target "<<key_target.ToString()<<std::endl;
-      PrintLast64Bits(key_target.ToString());
-      std::cout<<"Lookup: MinKey "<<x->GetKV()->MinKey().ToString()<<std::endl;
-      PrintLast64Bits(x->GetKV()->MinKey().ToString());
-      std::cout<<"Lookup: MaxKey "<<x->GetKV()->MaxKey().ToString()<<std::endl;
-      PrintLast64Bits(x->GetKV()->MaxKey().ToString());
-      std::cout<<"key vs max"<<compare_.UserCompare(key_target, x->GetKV()->MaxKey())<<std::endl;
-      std::cout<<"key vs min"<<compare_.UserCompare(key_target, x->GetKV()->MinKey())<<std::endl;*/
+
       if(cache_level == key_level 
               && compare_.UserCompare(key_target, x->GetKV()->MaxKey()) <= 0 
               && compare_.UserCompare(key_target, x->GetKV()->MinKey()) >= 0){
@@ -287,287 +219,49 @@ class SkipListBase { //Skiplist
     return x; 
   }
 
-  Node* CreateNode(KvWrapper* h, int* height_return){
-    int height = RandomHeight();
-    *height_return = height;
-    return NewNode(h, height);
-  }
-
   //does not allow duplicate insertion
-  bool Insert(Node* e, const int& height) { 
-    // TODO(opt): We can use a barrier-free variant of FindGreaterOrEqual()
-    // here since Insert() is externally synchronized.
-    Node* prev[kMaxHeight];
-    KvWrapper* h = e -> GetKV();
-    Node* x = FindGreaterOrEqual(h->key(), prev);
-    uint32_t level;
-    Slice tmp = h->key();
-    GetVarint32(&tmp, &level);
-    /*std::cout<<"Insert: level "<< level<<std::endl;
-    std::cout<<"Insert: MinKey "<<h->MinKey().ToString()<<std::endl;
-    std::cout<<"Insert: MaxKey "<<h->MaxKey().ToString()<<std::endl;*/
-    if(x != nullptr && Equal(h->key(), x->GetKV()->key())){
-      //std::cout<<"Duplicate Insert want: "<<h->MinKey().ToString()<<" "<<h->MaxKey().ToString()<<" "<<h->FileNumber() <<std::endl;
-      //std::cout<<"Duplicate Insert exit: "<<x->GetKV()->MinKey().ToString()<<" "<<x->GetKV()->MaxKey().ToString()<<" "<<x->GetKV()->FileNumber() <<std::endl;
-      return false;
-    }
-    // Our data structure does not allow duplicate insertion
-    assert(x == nullptr || !Equal(h->key(), x->GetKV()->key()));
-
-    //int height = RandomHeight();
-    if (height > GetMaxHeight()) {
-      for (int i = GetMaxHeight(); i < height; i++) {
-        prev[i] = head_;
-      }
-      max_height_.store(height, std::memory_order_relaxed);
-    }
-
-    //x = NewNode(h, height);
-    for (int i = 0; i < height; i++) {
-      e->NoBarrier_SetNext(i, prev[i]->NoBarrier_Next(i));
-      prev[i]->SetNext(i, e);
-    }  
-    return true;
+  bool Insert(Node* e) { 
+    SkipListAccessor accessor(sl_);
+    auto ret = accessor.insert(e);
+    //0: not insert; 1: insert success
+    return ret.second;
   }
 
-  Node* Remove(const Slice& key) {
-    Node* prev[kMaxHeight];
-    Node* x = FindGreaterOrEqual(key, prev);
-    if (x != nullptr && Equal(key, x->GetKV()->key())) {
-      for (int i = 0; i < GetMaxHeight(); i++) {
-        if (prev[i]->Next(i) == x) {
-          prev[i]->SetNext(i, x->Next(i));
-        }
-      }
-      return x;
-    } else {
+  Node* Remove(Node* e){
+    SkipListAccessor accessor(sl_);
+    auto ret = accessor.erase(e);
+    if(ret){
+      return e;
+    }else{
       return nullptr;
     }
-  } 
-  //When to Release deleted Node?
-  //SkipListLRUCache::FinishErase(Node* e); this e from Remove return
-
-  Node* GetHead() const { return head_; }
- private:
-  enum { kMaxHeight = 12 };
-  inline int GetMaxHeight() const {
-    return max_height_.load(std::memory_order_relaxed);
   }
 
-  Node* NewNode(KvWrapper* key, int height);
-  Node* FindGreaterOrEqual(const Slice& key, Node** prev) const;
-  Node* FindLessThan(const Slice& key) const;
-  bool KeyIsAfterNode(const Slice& key, Node* n) const;
-  int RandomHeight();
+  Node* NewNode(KvWrapper* h) {
+    void* memory = malloc(sizeof(Node));
+    if (!memory) {
+        // faild to allocate memory
+        return nullptr;
+    }
+    return new (memory) Node(h);
+  }
+
+ private:
+
   bool Equal(const Slice& a, const Slice& b) const { return (compare_.Compare(a, b) == 0); }
+
+  std::shared_ptr<SkipListT> sl_;
 
   CacheComparator const compare_;
 
   Arena* const arena_;  
 
-  Node* const head_;
-
-  std::atomic<int> max_height_; 
-
-  Random rnd_;
-
 };
-
-
-inline SkipListBase::Iterator::Iterator(const SkipListBase* list, const Slice& left_bound, const uint64_t& file_number):
-    list_(list), now_node_(nullptr), next_node_(nullptr), expected_file_(file_number){
-      SetLeftBound(left_bound);
-}
-
-inline bool SkipListBase::Iterator::Valid() const {
-  return (now_node_ != nullptr && now_node_ != list_->GetHead());
-}
-
-inline Node* SkipListBase::Iterator::node() const {
-  assert(Valid());
-  return now_node_;
-}
-
-inline void SkipListBase::Iterator::Next() {
-
-}
-
-/*inline void SkipListBase::Iterator::Prev() {
-  // Instead of using explicit "prev" links, we just search for the
-  // last node that falls before key.
-  assert(Valid());
-  node_ = list_->FindLessThan(node_->key);
-  if (node_ == list_->head_) {
-    node_ = nullptr;
-  }
-}*/
-
-inline void SkipListBase::Iterator::Seek(const Slice& target) {
-  now_node_ = list_->FindLessThan(target);
-  next_node_ = now_node_;
-}
-
-inline void SkipListBase::Iterator::SeekToFirst() {
-  //node_ = list_->head_->Next(0);
-}
-
-inline Slice SkipListBase::Iterator::key() const{
-  //return node_->GetKV()->key();
-  return Slice();
-}
-
-/*template <typename Key, class Comparator>
-inline void SkipList<Key, Comparator>::Iterator::SeekToLast() {
-  node_ = list_->FindLast();
-  if (node_ == list_->head_) {
-    node_ = nullptr;
-  }
-}*/
-
-inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
-  //std::cout<<"assert:" <<now_node_->GetKV()->MaxKey().ToString()<<" "<<right_bound.ToString()<<std::endl;
-  //assert(list_->compare_.Compare(now_node_->GetKV()->key(), left_bound_) < 0);
-  assert(now_node_ == next_node_);
-  const Comparator* user_cmp = list_->compare_.user_comparator();
-  while(1){
-    next_node_ = now_node_->Next(0);
-    uint32_t next_node_level = next_node_->GetKV()->level();
-    uint32_t bound_level = DecodeFixed32(right_bound.data());
-
-    Slice min_key, max_key;
-    
-    if(next_node_level != 0){
-      min_key = next_node_->GetKV()->MinKey();
-      max_key = next_node_->GetKV()->MaxKey();
-    }
-
-    uint64_t file_number = next_node_->GetKV()->FileNumber();
-    //todo
-    /*std::cout<<std::endl<<std::endl;
-    std::cout<<"level"<<next_node_level<<" "<<bound_level<<std::endl;
-    std::cout<<"bound:"<< Slice(left_bound_.data()+4, left_bound_.size()-4).ToString() <<" "<< 
-                Slice(right_bound.data()+4, right_bound.size()-4).ToString() <<std::endl;
-    std::cout<<"now_node:"<<now_node_->GetKV()->MinKey().ToString()<<" "<<now_node_->GetKV()->MaxKey().ToString()<<std::endl;            
-    std::cout<<"next_node:"<<min_key.ToString()<<" "<<max_key.ToString()<<std::endl;*/
-    
-    if(next_node_level == bound_level && 
-      user_cmp->Compare(min_key, Slice(left_bound_.data()+4, left_bound_.size()-4)) >= 0 && 
-        user_cmp->Compare(max_key, Slice(right_bound.data()+4, right_bound.size()-4)) <= 0){
-        //std::cout<<"compaction cache match"<<std::endl;
-        if(file_number != expected_file_){
-          now_node_ = next_node_;
-          continue;
-        }
-        now_node_ = next_node_;
-        SetLeftBound(right_bound);
-        return now_node_;
-    }else if( next_node_level < bound_level || (next_node_level == bound_level &&
-      user_cmp->Compare(max_key, Slice(left_bound_.data()+4, left_bound_.size()-4)) <= 0)){
-      now_node_ = next_node_;
-      //std::cout<<"max_key < left_bound"<<std::endl;
-      continue;
-    }else if( next_node_level > bound_level || (next_node_level == bound_level &&
-      user_cmp->Compare(min_key, Slice(right_bound.data()+4, right_bound.size()-4)) >= 0)){
-      next_node_ = now_node_;
-      SetLeftBound(right_bound);
-      //std::cout<<"right_bound < min_key"<<std::endl;
-      return nullptr;
-    }else{//[todo] need to delete
-      assert(file_number != expected_file_);
-      //std::cout<<"another case"<<std::endl;
-      now_node_ = next_node_;
-      continue;
-    }
-  }
-}
 
 SkipListBase::SkipListBase(CacheComparator cmp, Arena* arena)
     : compare_(cmp),
       arena_(arena),
-      head_(NewNode(nullptr, kMaxHeight)),
-      max_height_(1),
-      rnd_(0xdeadbeef) {
-  for (int i = 0; i < kMaxHeight; i++) {
-    head_->SetNext(i, nullptr);
-  }
-}
-
-Node* SkipListBase::NewNode(KvWrapper* h, int height) {
-  /*char* const node_memory = arena_->AllocateAligned(
-      sizeof(Node) + sizeof(std::atomic<Node*>) * (height - 1));
-  return new (node_memory) Node(h);*/
-  void* memory = malloc(sizeof(Node) + sizeof(std::atomic<Node*>) * (height - 1));
-  if (!memory) {
-      // 处理内存分配失败
-      return nullptr;
-  }
-
-  // 在分配的内存上调用 Node 的构造函数
-  return new (memory) Node(h);
-}
-
-Node* SkipListBase::FindGreaterOrEqual(const Slice& key, Node** prev) const {
-  Node* x = head_;
-  int level = GetMaxHeight() - 1;
-  while (true) {
-    Node* next = x->Next(level);
-    if (KeyIsAfterNode(key, next)) {
-      // Keep searching in this list
-      x = next;
-    } else {
-      if (prev != nullptr) prev[level] = x;
-      if (level == 0) {
-        return next;
-      } else {
-        // Switch to next list
-        level--;
-      }
-    }
-  }
-}
-
-Node* SkipListBase::FindLessThan(const Slice& key) const {
-  Node* x = head_;
-  int level = GetMaxHeight() - 1;
-  while (true) {
-    assert(x == head_ || compare_.Compare(x->GetKV()->key(), key) < 0);
-    Node* next = x->Next(level);
-    if (next == nullptr || compare_.Compare(next->GetKV()->key(), key) >= 0) {
-      if (level == 0) {
-        return x;
-      } else {
-        // Switch to next list
-        level--;
-      }
-    } else {
-      x = next;
-    }
-  }
-}
-
-bool SkipListBase::KeyIsAfterNode(const Slice& key, Node* n) const {
-  // null n is considered infinite
-  if(n == nullptr){
-    return false;
-  }
-  if(n -> GetKV() == nullptr){
-    return true;
-  }
-  return (compare_.Compare(n->GetKV()->key(), key) < 0);
-}
-
-int SkipListBase::RandomHeight() {
-  // Increase height with probability 1 in kBranching
-  static const unsigned int kBranching = 4;
-  int height = 1;
-  while (height < kMaxHeight && rnd_.OneIn(kBranching)) {
-    height++;
-  }
-  assert(height > 0);
-  assert(height <= kMaxHeight);
-  return height;
-}
-
+      sl_(SkipListT::createInstance()) {}
 /****************************************************************************************************** */
 
 // A single shard of sharded cache.
@@ -594,101 +288,6 @@ class SkipListLRUCache {
     MutexLock l(&mutex_);
     return usage_;
   }
-
-  class CacheIterator : public Iterator {
-   public:
-    // Initialize an iterator over the specified list.
-    // The returned iterator is not valid.
-    explicit CacheIterator(const SkipListBase* list, SkipListLRUCache* cache, const Slice& left_bound, const uint64_t& file_number)
-                                  : list_cache_(list, left_bound, file_number), cache_(cache), now_node_(nullptr){}
-
-    //[todo] ~CacheIterator() {}?
-    // Returns true iff the iterator is positioned at a valid node.
-    ~CacheIterator(){
-      if(now_node_ != nullptr){
-        cache_->Unref(now_node_);
-      }
-    }
-
-    bool Valid() const override{
-      return list_cache_.Valid();
-    }
-
-    // Returns the key at the current position.
-    // REQUIRES: Valid()
-    // Advances to the next position.
-    // REQUIRES: Valid()
-    void Next() override{
-    }
-
-    // Advance to the first entry with a key >= target
-    void Seek(const Slice& target) override{
-      list_cache_.Seek(target);
-      if(list_cache_.Valid()){
-        now_node_ = list_cache_.node();
-        cache_->Ref(now_node_);//one for iter, no return
-      }
-    }
-
-    // Position at the first entry in list.
-    // Final state of iterator is Valid() iff list is not empty.
-    void SeekToFirst() override{
-      /*list_cache_.SeekToFirst();
-      if(list_cache_.Valid()){
-        now_node_ = list_cache_.node();
-        cache_->Ref(now_node_);
-      }*/
-    }
-
-    void SeekToLast() override{}
-
-    void Prev() override{}
-
-    Slice key() const override{
-      assert(Valid());
-      return list_cache_.key();
-    }
-
-    Slice value() const override{}
-
-    Status status() const override{
-      return Status::OK();
-    }
-
-    /*void* node() override{
-      assert(Valid());
-      cache_->Ref(next_node_);
-      return list_cache_.node();
-    }*/
-
-    void* TestAndReturn(Slice right_bound) override{
-      assert(Valid());
-      Node* last_node = now_node_;
-      Node* node = list_cache_.TestAndReturn(right_bound);
-      if(node != nullptr && node != now_node_){
-        {
-          MutexLock l(&cache_->mutex_);
-          cache_->Ref(node); //one for iter
-          cache_->Ref(node); //one for return
-          now_node_ = node;
-          cache_->Unref(last_node);//for iter          
-        }
-        //cache_->Erase(last_node->GetKV()->key());
-        return node;
-      } 
-      return nullptr;
-    }
-
-   private:
-    SkipListLRUCache* cache_;
-    SkipListBase::Iterator list_cache_;
-    Node* now_node_;
-  };
-
-  Iterator* NewCacheIterator(const Slice& left_bound, const uint64_t& file_number){
-    return new CacheIterator(&table_, this, left_bound, file_number);
-  }
-
 
  private:
   void LRU_Remove(Node* e);
@@ -756,6 +355,7 @@ SkipListLRUCache::~SkipListLRUCache() {
   }
 }
 
+//[Lock when calling] -> list_mutex_
 void SkipListLRUCache::Ref(Node* e) {
   //std::cout<<"Ref"<<std::endl;
   if (e->refs == 1 && e->in_cache) {  // If on lru_ list, move to in_use_ list.
@@ -765,6 +365,7 @@ void SkipListLRUCache::Ref(Node* e) {
   e->refs++;
 }
 
+//[Lock when calling] -> list_mutex_
 void SkipListLRUCache::Unref(Node* e) {
   //std::cout<<"UnRef"<<std::endl;
   assert(e->refs > 0);
@@ -797,10 +398,7 @@ void SkipListLRUCache::LRU_Append(Node* list, Node* e) {
 
 Cache::Handle* SkipListLRUCache::Lookup(const Slice& key) {
   Node* e = nullptr;
-  {
-    MutexLock l(&mutex_);   
-    e = table_.Lookup(key);
-  }
+  e = table_.Lookup(key);
   if (e != nullptr) {
     {
       MutexLock l(&list_mutex_);
@@ -835,21 +433,20 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
   }
 
   int height;
-  Node* e = table_.CreateNode(kv, &height);
+  Node* e = table_.NewNode(kv);
   e->deleter = deleter;
   e->charge = charge;
   e->refs = 1;  // for the returned handle. Unref by iter's RegisterCleanup
-  e->height = height;
   e->in_cache = false;
   //std::cout<<"Insert"<<std::endl;
   if (capacity_ > 0) {
     {
-      e->refs++;  // for the cache's reference.[LRU_Append]
+    e->refs++;  // for the cache's reference.[LRU_Append]
       std::unique_lock<std::mutex> lock(queue_mutex_); 
       insert_queue_.push(e);
       has_items.store(true, std::memory_order_release);
-    }  
-  } 
+    }
+  }
   return reinterpret_cast<Cache::Handle*>(e);
 }
 
@@ -862,7 +459,7 @@ void SkipListLRUCache::InsertThread() {
             insert_queue_.pop();
             lock.unlock(); // 解锁以允许其他线程访问队列
 
-            {
+            /*{
               MutexLock l(&list_mutex_);
               e->in_cache = true;
               if(e->refs == 1){
@@ -871,22 +468,38 @@ void SkipListLRUCache::InsertThread() {
                 LRU_Append(&in_use_, e);
               }
               usage_ += e->charge;
-            }
-            MutexLock l(&mutex_);
-            bool if_insert = table_.Insert(e, e->height);
+            }*/
+            bool if_insert = table_.Insert(e);
             //does not allow duplicate insertion, does not need to return and erase
             //assert(if_insert);
-            if(!if_insert) {
-              //std::cout<<"Duplicate insertion"<<std::endl;
-              e->refs--;
-              e->in_cache = false;
-              usage_ -= e->charge;
+            /*if(!if_insert) {
+              std::cout<<"Duplicate insertion"<<std::endl;
+              {
+                MutexLock l(&list_mutex_);
+                e->refs--;
+                e->in_cache = false;
+                usage_ -= e->charge;
+              }
+            }*/
+            if(if_insert){
+              {
+                MutexLock l(&list_mutex_);
+                e->in_cache = true;
+                if(e->refs == 1){
+                  LRU_Append(&lru_, e);
+                }else{
+                  LRU_Append(&in_use_, e);
+                }
+                usage_ += e->charge;
+              }
+            }else{
+              std::cout<<"Duplicate insertion"<<std::endl;
             }
 
             while (usage_ > capacity_ && lru_.cache_next != &lru_) {
               Node* old = lru_.cache_next;
               assert(old->refs == 1);
-              bool erased = FinishErase(table_.Remove(old->GetKV()->key()));
+              bool erased = FinishErase(table_.Remove(old));
               if (!erased) {  // to avoid unused variable when compiled NDEBUG
                 assert(erased);
               }
@@ -920,7 +533,7 @@ bool SkipListLRUCache::FinishErase(Node* e) {
 
 void SkipListLRUCache::Erase(const Slice& key) {
   MutexLock l(&mutex_);
-  FinishErase(table_.Remove(key));
+  //[todo] only read-write mix called
 }
 
 void SkipListLRUCache::Prune() {
@@ -928,7 +541,7 @@ void SkipListLRUCache::Prune() {
   while (lru_.cache_next != &lru_) {
     Node* e = lru_.cache_next;
     assert(e->refs == 1);
-    bool erased = FinishErase(table_.Remove(e->GetKV()->key()));
+    bool erased = FinishErase(table_.Remove(e));
     if (!erased) {  // to avoid unused variable when compiled NDEBUG
       assert(erased);
     }
@@ -983,8 +596,10 @@ class LRUCacheWrapper : public Cache {
     return reinterpret_cast<Node*>(handle)->GetKV()->key();
   }
 
+  //[todo]
   Iterator* NewIterator(const Slice& left_bound, const uint64_t& file_number) override {
-    return lru_cache_.NewCacheIterator(left_bound, file_number);
+    //return lru_cache_.NewCacheIterator(left_bound, file_number);
+    return nullptr;
   }
 };
 

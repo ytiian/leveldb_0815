@@ -155,9 +155,9 @@ class LEVELDB_EXPORT Cache {
 
  private:
   bool is_monitor_;
-  std::atomic<uint64_t> cache_hits_;
-  std::atomic<uint64_t> cache_misses_;
-  std::atomic<uint64_t> cache_insert_;
+  std::atomic<uint64_t> cache_hits_ = 0;
+  std::atomic<uint64_t> cache_misses_ = 0;
+  std::atomic<uint64_t> cache_insert_ = 0;
   std::thread hit_rate_thread_;
   std::mutex mtx_;
   std::condition_variable cv_;
