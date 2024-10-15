@@ -20,6 +20,7 @@
 #include "util/coding.h"
 #include "util/logging.h"
 #include "db/memory_structure.h"
+#include "db/saver.h"
 
 namespace leveldb {
 
@@ -264,20 +265,7 @@ void Version::AddIterators(const ReadOptions& options,
 }
 
 // Callback from TableCache::Get()
-namespace {
-enum SaverState {
-  kNotFound,
-  kFound,
-  kDeleted,
-  kCorrupt,
-};
-struct Saver {
-  SaverState state;
-  const Comparator* ucmp;
-  Slice user_key;
-  std::string* value;
-};
-}  // namespace
+
 static void SaveValue(void* arg, const Slice& ikey, const Slice& v) {
   Saver* s = reinterpret_cast<Saver*>(arg);
   ParsedInternalKey parsed_key;
@@ -324,59 +312,160 @@ void Version::AddFileToQueue(uint64_t file, uint64_t file_size,
       std::cout << "The 56-bit number in decimal: " << result << std::endl;
 }*/
 
+//std::atomic<int> status[config::kNumLevels]; 
+std::condition_variable cv;                  
+std::atomic<bool> stop;
+
+void Version::ThreadA_ReadUseIO(Slice user_key, Slice internal_key, void* arg, 
+                        bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*), 
+                        const Comparator* ucmp) {
+    Saver* s = reinterpret_cast<Saver*>(arg);
+    for (int level = 1; level < config::kNumLevels; level++) {
+      if(stop){
+        return;
+      }
+
+      size_t num_files = files_[level].size();
+      if (num_files == 0) {
+        continue;
+      }
+
+     
+      uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);
+      if (index < num_files) {
+        FileMetaData* f = files_[level][index];
+        if (ucmp->Compare(user_key, f->smallest.user_key()) < 0) {
+          s->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
+          continue;
+        } else {
+          s->status[level].store(SEARCH_BEGIN_CACHE_SEARCH, std::memory_order_seq_cst);
+          if (!(*ReadUseIO)(arg, level, f, ucmp)) {
+              //std::cout<<"find io:" << level << std::endl;
+              return;
+          }          
+        }
+      }else{
+        s->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
+      }
+ 
+      /*if (level == 1) {
+        while (true) {
+            FileMetaData* f = nullptr;
+            {
+                std::unique_lock<std::mutex> lock(interState_files_mutex_);
+                if (interState_files_.empty()) {
+                    break;
+                }
+                f = interState_files_.front();
+                interState_files_.pop();
+            }
+            if (ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0) { 
+                continue;
+            }
+            if (!(*ReadUseIO)(arg, level, f, ucmp)) { // false means stop searching
+                s->status[level] = 1; // ???????????????1
+                //std::cout << "A_Set_level to 1:" <<level<<std::endl;
+                int current_min_level = min_level.load();
+                while (level < current_min_level) {
+                    if (min_level.compare_exchange_weak(current_min_level, level)) {
+                        break;
+                    }
+                } 
+                //std::cout << "A find return" <<level<<std::endl;                       
+                return;
+            }
+        }
+      }*/
+      //std::cout<<"search io:" << level << std::endl;
+      /*if (!(*ReadUseIO)(arg, level, need_search[level], ucmp)) {
+          //std::cout<<"find io:" << level << std::endl;
+          return;
+      }*/
+      //std::cout << "A_Set_level to -1:" <<level<<std::endl;
+    }
+}
+
+
+void Version::ThreadB_ReadFromCache(void* arg, bool (*ReadFromCache)(void*, int, bool*)) {
+  Saver* s = reinterpret_cast<Saver*>(arg);
+  for (int level = 1; level < config::kNumLevels; level++) {
+    if(stop){
+      return;
+    }
+
+    size_t num_files = files_[level].size();
+    if (num_files == 0) {
+      continue;
+    }
+    
+    while(s->status[level].load(std::memory_order_seq_cst) != SEARCH_BEGIN_CACHE_SEARCH &&
+         s->status[level].load(std::memory_order_seq_cst) != SEARCH_NOT_FOUND){
+      if(stop){
+        return;
+      }
+    };
+
+    if(s->status[level].load(std::memory_order_seq_cst) == SEARCH_NOT_FOUND){
+        continue;
+    }
+
+    //std::cout<<"start cache"<<std::endl;
+    bool if_search = false;
+    //std::cout<<"search cache:" << level << std::endl;
+    if (!(*ReadFromCache)(arg, level, &if_search)) {
+        //std::cout<<"find cache:" << level << std::endl;
+        s->status[level].store(SEARCH_FOUND, std::memory_order_seq_cst);
+        stop = true;
+        return;
+    }
+
+    if (if_search) {
+        s->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
+    }else{
+        s->status[level].store(SEARCH_NEED_IO, std::memory_order_seq_cst);
+    }
+  }
+}
+
+
+void* Version::read_thread(void *arg) {
+  read_struct* str = (read_struct*)arg;
+  Version* v = str->version;
+  v->ThreadB_ReadFromCache(str->arg, str->ReadFromCache);
+  return NULL;
+}
+
 void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
                                   bool (*ReadFromCache)(void*, int, bool*),
-                                 bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*)) {
-  //std::cout<<std::endl<<std::endl<<std::endl;
-  //std::cout<<internal_key.ToString()<<std::endl;
-  //PrintLast64Bits(internal_key.ToString());
+                                 bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*),
+                                 threadpool thpool) {
+  Saver* s = reinterpret_cast<Saver*>(arg);
   const Comparator* ucmp = vset_->icmp_.user_comparator();
-  //level 1
-  while(true) {
-    FileMetaData* f = nullptr;
-    {
-      std::unique_lock<std::mutex> lock(interState_files_mutex_);
-      if(interState_files_.empty()) {
-        break;
-      }
-      f = interState_files_.front();
-      interState_files_.pop();
-    }
-    if(ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0){ 
-      continue;
-    }
-    if (!(*ReadUseIO)(arg, 1, f, ucmp)) { //false means stop searching
-      return;
-    }
+  stop = false;
+
+  for (int level = 1; level < config::kNumLevels; level++) {
+    s->status[level] = SEARCH_INIT;
   }
 
-  for (int level = 1; level < config::kNumLevels; level++){
-    size_t num_files = files_[level].size();
-    if (num_files == 0) continue;
-    // Binary search to find earliest index whose largest key >= internal_key.
-
-    bool if_search = false;
-    if(!(*ReadFromCache)(arg, level, &if_search)){
-      return;
-    }
-    //std::cout<<if_search<<std::endl;
-    if(if_search){
-      continue;
-    }
-
-    uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);
-        
-    if (index < num_files) {
-      FileMetaData* f = files_[level][index];
-      if (ucmp->Compare(user_key, f->smallest.user_key()) < 0) {
-        continue;
-      }else{
-        if (!(*ReadUseIO)(arg, level, f, ucmp)) { //false means stop searching
-          return;
-        }
-      }
-    }
+  //std::cout<<std::endl<<std::endl<<"start a Get:"<<std::endl;
+  read_struct str[1];
+  str[0].val = CACHE_THRD;
+  for(int i = 0; i < 1; i++){
+    str[i].arg = arg;
+    str[i].ReadFromCache = ReadFromCache;
+    str[i].ReadUseIO = ReadUseIO;
+    str[i].user_key = user_key;
+    str[i].internal_key = internal_key;
+    str[i].ucmp = ucmp;
+    str[i].version = this;
+    thpool_add_work(thpool, read_thread, &str[i]);
   }
+
+  ThreadA_ReadUseIO(user_key, internal_key, arg, ReadUseIO, ucmp);
+
+  stop = true;
+
+  thpool_wait(thpool);
 }
 
 Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, std::string* value, 
@@ -391,7 +480,7 @@ Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, 
 }
 
 Status Version::Get(const ReadOptions& options, const LookupKey& k,
-                    std::string* value, GetStats* stats) {
+                    std::string* value, GetStats* stats, threadpool thpool) {
   stats->seek_file = nullptr;
   stats->seek_file_level = -1;
 
@@ -503,7 +592,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
   state.saver.user_key = k.user_key();
   state.saver.value = value;
 
-  ForEachOverlapping(state.saver.user_key, state.ikey, &state, &State::ReadFromCache, &State::Match);
+  ForEachOverlapping(state.saver.user_key, state.ikey, &state, &State::ReadFromCache, &State::Match, thpool);
 
   return state.found ? state.s : Status::NotFound(Slice());
 }
@@ -1388,7 +1477,7 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
       } else {
         // Create concatenating iterator for the files from this level
         list[num++] = NewTwoLevelIterator(
-            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which], c->level() + which, which, c->GetStatePtr()),
+            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which], c->level() + which),
             &GetFileIterator, table_cache_, options);
       }
     }
@@ -1638,7 +1727,6 @@ Compaction::Compaction(const Options* options, int level)
   for (int i = 0; i < config::kNumLevels; i++) {
     level_ptrs_[i] = 0;
   }
-  compaction_state_ = new bool(true);
 }
 
 Compaction::~Compaction() {

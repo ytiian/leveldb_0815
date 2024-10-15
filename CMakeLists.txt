@@ -154,6 +154,7 @@ target_sources(leveldb
     "db/L0_reminder.h"
     "db/L0_reminder.cc"
     "db/memory_structure.h"
+    "db/saver.h"
     "port/port_stdcxx.h"
     "port/port.h"
     "port/thread_annotations.h"
@@ -198,6 +199,14 @@ target_sources(leveldb
     "util/zipf.h"
     "util/skiplist_cache.cc"
     "util/aligned_buffer.h"
+    "util/thpool.h"
+    "util/thpool.cc"
+    "util/affinity.h"
+    "util/lsm_mutex.h"
+    "util/cpumap.h"
+    "util/defs.h"
+    "util/cpumap.cc"
+    "util/bitops.h"
 
   # Only CMake 3.3+ supports PUBLIC sources in targets exported by "install".
   $<$<VERSION_GREATER:CMAKE_VERSION,3.2>:PUBLIC>
@@ -294,6 +303,8 @@ endif(HAVE_TCMALLOC)
 find_package(Threads REQUIRED)
 target_link_libraries(leveldb Threads::Threads)
 
+find_library(NUMA_LIB numa)
+target_link_libraries(leveldb ${NUMA_LIB})
 #
 # 手动设置 Glog 库路径
 set(GLOG_INCLUDE_DIRS "/usr/include/glog")

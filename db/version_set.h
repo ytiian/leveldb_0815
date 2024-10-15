@@ -24,6 +24,7 @@
 #include "db/version_edit.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
+#include "util/thpool.h"
 
 namespace leveldb {
 
@@ -75,7 +76,7 @@ class Version {
   // return OK.  Else return a non-OK status.  Fills *stats.
   // REQUIRES: lock is not held
   Status Get(const ReadOptions&, const LookupKey& key, std::string* val,
-             GetStats* stats);
+             GetStats* stats, threadpool thpool = nullptr);
 
   Status GetWithReminder(const ReadOptions& options, const LookupKey& k, 
             std::string* value, const Slice& reminder_result);
@@ -122,7 +123,21 @@ class Version {
   void AddFileToQueue(uint64_t file, uint64_t file_size,
                const InternalKey& smallest, const InternalKey& largest);
 
+  static void *read_thread(void *arg);
+
  private:
+
+  typedef struct read_struct {
+    int val;
+    void* arg;
+    bool (*ReadFromCache)(void*, int, bool*);
+    bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*);
+    Slice user_key;
+    Slice internal_key;    
+    const Comparator* ucmp;
+    Version* version;
+    FileMetaData** need_search;
+  }read_struct;
 
   std::mutex interState_files_mutex_;
   std::queue<FileMetaData*> interState_files_; //L0-L1computation output file that has been downloaded but not yet applied
@@ -155,7 +170,16 @@ class Version {
   //
   // REQUIRES: user portion of internal_key == user_key.
   void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
-                          bool (*ReadFromCache)(void*, int, bool*), bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*));
+                          bool (*ReadFromCache)(void*, int, bool*), 
+                          bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*),
+                          threadpool thpool);
+
+  void ThreadA_ReadUseIO(Slice user_key, Slice internal_key, void* arg, 
+                        bool (*ReadUseIO)(void*, int, FileMetaData*, const Comparator*), 
+                        const Comparator* ucmp);
+  
+  void ThreadB_ReadFromCache(void* arg, bool (*ReadFromCache)(void*, int, bool*));
+
 
   VersionSet* vset_;  // VersionSet to which this Version belongs
   Version* next_;     // Next version in linked list
@@ -373,10 +397,6 @@ class Compaction {
 
   bool IfInInputFiles(const uint64_t file_number);
 
-  bool* GetStatePtr() { return compaction_state_; }
-
-  void SetStatePtr(bool state) { *compaction_state_ = state; }
-
   Version* Get_version() { return input_version_; }
 
  private:
@@ -408,8 +428,6 @@ class Compaction {
   // higher level than the ones involved in this compaction (i.e. for
   // all L >= level_ + 2).
   size_t level_ptrs_[config::kNumLevels];
-
-  bool* compaction_state_;
 };
 
 }  // namespace leveldb

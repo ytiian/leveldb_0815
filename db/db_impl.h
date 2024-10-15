@@ -21,6 +21,7 @@
 #include "port/port.h"
 #include "port/thread_annotations.h"
 #include "db/L0_reminder.h"
+#include "util/thpool.h"
 
 namespace leveldb {
 
@@ -193,6 +194,8 @@ class DBImpl : public DB {
   uint64_t logfile_number_ GUARDED_BY(mutex_);
   log::Writer* log_;
   uint32_t seed_ GUARDED_BY(mutex_);  // For sampling.
+
+  threadpool thpool;
 
   // Queue of writers.
   std::deque<Writer*> writers_ GUARDED_BY(mutex_);

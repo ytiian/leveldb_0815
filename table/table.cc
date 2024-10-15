@@ -17,6 +17,8 @@
 #include "table/pass_cache_iterator.h"
 #include "util/coding.h"
 #include "leveldb/comparator.h"
+#include "db/dbformat.h"
+#include "db/saver.h"
 #include <iostream>
 
 namespace leveldb {
@@ -372,23 +374,35 @@ Status Table::InternalGetByIO(const ReadOptions& options, const Slice& k, void* 
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)){
   Status s;
+  Saver* saver = reinterpret_cast<Saver*>(arg);
   Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NOT_FOUND){
+    return s;
+  }
   iiter->Seek(k);
   if (iiter->Valid()) {
     Slice handle_value = iiter->value();
     FilterBlockReader* filter = rep_->filter;
     BlockHandle handle;
+    if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NOT_FOUND){
+      return s;
+    }
     if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
+      saver->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
     } else {
-      Iterator* block_iter = BlockReaderWithoutCache(this, options, iiter->value(), level, ucmp, k, CallerType::kGet);
-      block_iter->Seek(k);
-      if (block_iter->Valid()) {
-        (*handle_result)(arg, block_iter->key(), block_iter->value());
+      while(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_BEGIN_CACHE_SEARCH){}
+      if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NEED_IO){
+        //std::cout<<"start read block"<<std::endl;
+        Iterator* block_iter = BlockReaderWithoutCache(this, options, iiter->value(), level, ucmp, k, CallerType::kGet);
+        block_iter->Seek(k);
+        if (block_iter->Valid()) {
+          (*handle_result)(arg, block_iter->key(), block_iter->value());
+        }
+        s = block_iter->status();
+        delete block_iter;      
       }
-      s = block_iter->status();
-      delete block_iter;
     }
   }
   if (s.ok()) {
