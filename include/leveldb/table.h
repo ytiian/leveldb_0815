@@ -53,7 +53,8 @@ class LEVELDB_EXPORT Table {
   Iterator* NewIterator(const ReadOptions&) const;
 
   Iterator* NewIterator(const ReadOptions&, const Slice& left_bound,
-                        const Slice& right_bound, const int& level, const uint64_t& file_number) const;
+                        const Slice& right_bound, const int& level, const uint64_t& file_number, 
+                        const int& which, bool* compaction_state) const;
 
   // Given a key, return an approximate byte offset in the file where
   // the data for that key begins (or would begin if the key were

@@ -99,7 +99,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
 
 Iterator* TableCache::NewIterator(const ReadOptions& options,
                                   uint64_t file_number, uint64_t file_size, const Slice& left_bound,
-                                  const Slice& right_bound, const int& level) {
+                                  const Slice& right_bound, const int& level, const int& which, bool* compaction_state) {
 
   Cache::Handle* handle = nullptr;
   Status s = FindTable(file_number, file_size, &handle);
@@ -108,7 +108,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   }
 
   Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-  Iterator* result = table->NewIterator(options, left_bound, right_bound, level, file_number);
+  Iterator* result = table->NewIterator(options, left_bound, right_bound, level, file_number, which, compaction_state);
   result->RegisterCleanup(&UnrefEntry, cache_, handle);
 
   return result;

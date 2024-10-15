@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <unordered_map>
 
 #include "folly/ConcurrentSkipList.h"
 
@@ -97,7 +98,7 @@ struct Node {
 
   ~Node() {
     if (kv != nullptr) {
-        free(kv);  // 释放通过 malloc 动态分配的 kv 空间
+        free(kv);  // 閲婃斁閫氳繃 malloc 鍔ㄦ�佸垎閰嶇殑 kv 绌洪棿
         kv = nullptr;
     }
   }
@@ -168,6 +169,12 @@ void CacheComparator::FindShortestSeparator(std::string* start,
 void CacheComparator::FindShortSuccessor(std::string* key) const {}
 
 bool CacheComparator::operator()(Node* const& lhs, Node* const& rhs) const{
+  if(lhs->GetKV() == nullptr){
+    return true;
+  }
+  if(rhs->GetKV() == nullptr){
+    return false;
+  }
   return Compare(lhs->GetKV()->key(), rhs->GetKV()->key()) < 0;
 }
 
@@ -188,7 +195,9 @@ class SkipListBase { //Skiplist
    public:
     // Initialize an iterator over the specified list.
     // The returned iterator is not valid.
-    explicit Iterator(const SkipListBase* list, const Slice& left_bound,const uint64_t& file_number);
+    explicit Iterator(SkipListBase* list, const Slice& left_bound,const uint64_t& file_number, bool* compaction_state);
+
+    explicit Iterator(SkipListBase* list);
 
     // Returns true iff the iterator is positioned at a valid node.
     bool Valid() const;
@@ -204,13 +213,16 @@ class SkipListBase { //Skiplist
     // Advances to the previous position.
     // REQUIRES: Valid()
     //void Prev();
+    Node* NextIterNext();
+
+    Node* NowIterNext(); 
 
     // Advance to the first entry with a key >= target
     void Seek(const Slice& target);
 
     // Position at the first entry in list.
     // Final state of iterator is Valid() iff list is not empty.
-    void SeekToFirst();
+    void SeekToFirst(const Slice& smallest);
 
     // Position at the last entry in list.
     // Final state of iterator is Valid() iff list is not empty.
@@ -218,13 +230,13 @@ class SkipListBase { //Skiplist
 
     Slice key() const;
 
-    Node* TestAndReturn(Slice right_bound);
+    Node* TestAndReturn(Slice right_bound, bool* stop);
 
    private:
     SkipListAccessor accessor_;
     SkipListT::iterator now_iter_;
     SkipListT::iterator next_iter_;
-    const SkipListBase* list_;
+    SkipListBase* list_;
     Node* now_node_;
     Node* next_node_;
     const uint64_t expected_file_;
@@ -300,6 +312,19 @@ class SkipListBase { //Skiplist
     return new (memory) Node(h);
   }
 
+  void InsertMap(const uint64_t& file_number, bool* state){
+    compaction_state_map[file_number] = state;
+  }
+
+  bool NeedToErase(const uint64_t& file_number){
+    auto it = compaction_state_map.find(file_number);
+
+    if(it != compaction_state_map.end()){
+      bool* state = it->second;
+      return !(*state);
+    }
+  }
+
  private:
 
   bool Equal(const Slice& a, const Slice& b) const { return (compare_.Compare(a, b) == 0); }
@@ -310,6 +335,8 @@ class SkipListBase { //Skiplist
 
   Arena* const arena_;  
 
+  std::unordered_map<uint64_t, bool*> compaction_state_map;
+
 };
 
 SkipListBase::SkipListBase(CacheComparator cmp, Arena* arena)
@@ -317,13 +344,20 @@ SkipListBase::SkipListBase(CacheComparator cmp, Arena* arena)
       arena_(arena),
       sl_(SkipListT::createInstance()) {}
 
-inline SkipListBase::Iterator::Iterator(const SkipListBase* list, const Slice& left_bound, const uint64_t& file_number):
+inline SkipListBase::Iterator::Iterator(SkipListBase* list, const Slice& left_bound, const uint64_t& file_number, bool* compaction_state):
     list_(list),
     accessor_(list->sl_), 
     now_node_(nullptr), next_node_(nullptr), 
     expected_file_(file_number){
       SetLeftBound(left_bound);
+      list_->InsertMap(file_number, compaction_state);
 }
+
+inline SkipListBase::Iterator::Iterator(SkipListBase* list):
+    list_(list),
+    accessor_(list->sl_), 
+    now_node_(nullptr), next_node_(nullptr),
+    expected_file_(0){}
 
 inline bool SkipListBase::Iterator::Valid() const {
   return now_node_ != nullptr;
@@ -339,6 +373,17 @@ inline void SkipListBase::Iterator::Next() {
 
 }
 
+inline Node* SkipListBase::Iterator::NextIterNext(){
+  next_iter_++;
+  next_node_ = *next_iter_;
+  return next_node_;
+}
+
+inline Node* SkipListBase::Iterator::NowIterNext(){
+  now_iter_ = next_iter_;
+  now_node_ = *now_iter_;
+  return now_node_;
+}
 
 inline void SkipListBase::Iterator::Seek(const Slice& target) {
   Node tmp(target);
@@ -348,8 +393,12 @@ inline void SkipListBase::Iterator::Seek(const Slice& target) {
   next_node_ = *next_iter_;
 }
 
-inline void SkipListBase::Iterator::SeekToFirst() {
-  //node_ = list_->head_->Next(0);
+inline void SkipListBase::Iterator::SeekToFirst(const Slice& smallest) {
+  Node tmp(smallest);
+  now_iter_ = accessor_.lower_bound(&tmp);
+  next_iter_ = now_iter_;
+  now_node_ = *now_iter_;
+  next_node_ = *next_iter_;
 }
 
 inline Slice SkipListBase::Iterator::key() const{
@@ -365,7 +414,7 @@ inline void SkipList<Key, Comparator>::Iterator::SeekToLast() {
   }
 }*/
 
-inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
+inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound, bool* stop){
   //std::cout<<"assert:" <<now_node_->GetKV()->MaxKey().ToString()<<" "<<right_bound.ToString()<<std::endl;
   //assert(list_->compare_.Compare(now_node_->GetKV()->key(), left_bound_) < 0);
   assert(now_node_ == next_node_);
@@ -405,6 +454,7 @@ inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
         now_iter_ = next_iter_;
         now_node_ = *now_iter_;
         SetLeftBound(right_bound);
+        *stop = true;
         return now_node_;
     }else if( next_node_level < bound_level || (next_node_level == bound_level &&
       user_cmp->Compare(max_key, Slice(left_bound_.data()+4, left_bound_.size()-4)) <= 0)){
@@ -418,10 +468,15 @@ inline Node* SkipListBase::Iterator::TestAndReturn(Slice right_bound){
       next_node_ = *next_iter_;
       SetLeftBound(right_bound);
       //std::cout<<"right_bound < min_key"<<std::endl;
+      *stop = true;
       return nullptr;
-    }else{//[todo] need to delete
+    }else{
       assert(file_number != expected_file_);
       //std::cout<<"another case"<<std::endl;
+      //Node* tmp = next_node_;
+      //next_iter_ = now_iter_;
+      //next_node_ = *next_iter_;
+      //return tmp;
       now_iter_ = next_iter_;
       now_node_ = *now_iter_;
       continue;
@@ -450,6 +505,7 @@ class SkipListLRUCache {
                         void (*deleter)(const Slice& key, void* value));
   Cache::Handle* Lookup(const Slice& key);
   void Release(Cache::Handle* handle);
+  void Erase(Node* e);
   void Erase(const Slice& key);
   void Prune();
   uint64_t TotalCharge() const {
@@ -461,13 +517,22 @@ class SkipListLRUCache {
    public:
     // Initialize an iterator over the specified list.
     // The returned iterator is not valid.
-    explicit CacheIterator(const SkipListBase* list, SkipListLRUCache* cache, const Slice& left_bound, const uint64_t& file_number)
-                                  : list_cache_(list, left_bound, file_number), cache_(cache), now_node_(nullptr){}
+    explicit CacheIterator(SkipListBase* list, SkipListLRUCache* cache, 
+                              const Slice& left_bound, const uint64_t& file_number, const int& which, bool* compaction_state)
+                                  : list_cache_(list, left_bound, file_number, compaction_state), cache_(cache), now_node_(nullptr), test_cnt_(0), which_(which), stop(false){}
+
+    explicit CacheIterator(SkipListBase* list, SkipListLRUCache* cache, 
+                              const Slice& left_bound, const Slice& right_bound)
+                                  : list_cache_(list), which_(0){
+                                    SetSmallest(left_bound);
+                                    SetLargest(right_bound);
+                                  }
 
     //[todo] ~CacheIterator() {}?
     // Returns true iff the iterator is positioned at a valid node.
     ~CacheIterator(){
       if(now_node_ != nullptr){
+        MutexLock l(&cache_->list_mutex_);
         cache_->Unref(now_node_);
       }
     }
@@ -481,6 +546,7 @@ class SkipListLRUCache {
     // Advances to the next position.
     // REQUIRES: Valid()
     void Next() override{
+      now_node_ = list_cache_.NowIterNext();
     }
 
     // Advance to the first entry with a key >= target
@@ -488,6 +554,7 @@ class SkipListLRUCache {
       list_cache_.Seek(target);
       if(list_cache_.Valid()){
         now_node_ = list_cache_.node();
+        MutexLock l(&cache_->list_mutex_);
         cache_->Ref(now_node_);//one for iter, no return
       }
     }
@@ -495,11 +562,12 @@ class SkipListLRUCache {
     // Position at the first entry in list.
     // Final state of iterator is Valid() iff list is not empty.
     void SeekToFirst() override{
-      /*list_cache_.SeekToFirst();
+      list_cache_.SeekToFirst(smallest_);
       if(list_cache_.Valid()){
         now_node_ = list_cache_.node();
-        cache_->Ref(now_node_);
-      }*/
+        MutexLock l(&cache_->list_mutex_);
+        cache_->Ref(now_node_);//one for iter, no return
+      }
     }
 
     void SeekToLast() override{}
@@ -525,30 +593,71 @@ class SkipListLRUCache {
 
     void* TestAndReturn(Slice right_bound) override{
       assert(Valid());
-      Node* last_node = now_node_;
-      Node* node = list_cache_.TestAndReturn(right_bound);
-      if(node != nullptr && node != now_node_){
-        {
-          MutexLock l(&cache_->mutex_);
-          cache_->Ref(node); //one for iter
-          cache_->Ref(node); //one for return
-          now_node_ = node;
-          cache_->Unref(last_node);//for iter          
+      stop = false;
+      while(1){
+        Node* node = list_cache_.TestAndReturn(right_bound, &stop);
+        if(!stop){
+          cache_->Erase(node);
+          continue;
         }
-        //cache_->Erase(last_node->GetKV()->key());
-        return node;
-      } 
-      return nullptr;
+        Node* last_node = now_node_;
+        if(node != nullptr && node != now_node_){
+          {
+            MutexLock l(&cache_->list_mutex_);
+            cache_->Ref(node); //one for iter
+            cache_->Ref(node); //one for return
+            now_node_ = node;
+            cache_->Unref(last_node);//for iter          
+          }
+          //std::cout<<"last_node->refs:"<<last_node->refs<<std::endl;
+          test_cnt_++;
+          if(test_cnt_ > 1 && which_ == 1){
+            //std::cout<<"Erase"<<std::endl;
+            cache_->Erase(last_node);
+          }
+          return node;
+        } 
+        return nullptr;
+      }
     }
 
    private:
     SkipListLRUCache* cache_;
     SkipListBase::Iterator list_cache_;
     Node* now_node_;
+    const int which_; //0:input level; 1:output level
+    bool stop;
+    int test_cnt_;
+    Slice smallest_;
+    Slice largest_;
+    std::vector<char> smallest_data_;
+    std::vector<char> largest_data_;
+
+    void SetSmallest(const Slice& smallest){
+      smallest_data_.resize(smallest.size());
+      memcpy(smallest_data_.data(), smallest.data(), smallest.size());
+      smallest_ = Slice(smallest_data_.data(), smallest.size());
+    }
+
+    void SetLargest(const Slice& largest){
+      largest_data_.resize(largest.size());
+      memcpy(largest_data_.data(), largest.data(), largest.size());
+      largest_ = Slice(largest_data_.data(), largest.size());
+    }
+
   };
 
-  Iterator* NewCacheIterator(const Slice& left_bound, const uint64_t& file_number){
-    return new CacheIterator(&table_, this, left_bound, file_number);
+  Iterator* NewCacheIterator(const Slice& left_bound, const uint64_t& file_number, const int& which, bool* compaction_state){
+    return new CacheIterator(&table_, this, left_bound, file_number, which, compaction_state);
+  }
+
+  Iterator* NewCacheIterator(const Slice& left_bound, const Slice& right_bound){
+    return new CacheIterator(&table_, this, left_bound, right_bound);
+  }
+
+
+  bool NeedToErase(const uint64_t& file_number){
+    return table_.NeedToErase(file_number);
   }
 
  private:
@@ -681,7 +790,6 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
                                 void (*deleter)(const Slice& key,
                                                 void* value), const Slice& min_key, 
                                                         const uint64_t& file_number) {
-  //MutexLock l(&mutex_);
   KvWrapper* kv = 
         reinterpret_cast<KvWrapper*>(malloc(sizeof(KvWrapper) - 1 + key.size() + min_key.size()));
   kv->value = value;
@@ -703,23 +811,38 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
   //std::cout<<"Insert"<<std::endl;
   if (capacity_ > 0) {
     {
-    e->refs++;  // for the cache's reference.[LRU_Append]
+      e->refs++;  // for the cache's reference.[LRU_Append]
+      int cnt = 0;
       std::unique_lock<std::mutex> lock(queue_mutex_); 
+
+      while (insert_queue_.size() > 5) {
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+        lock.lock();
+        cnt++;
+      }
       insert_queue_.push(e);
       has_items.store(true, std::memory_order_release);
+      /*if(cnt > 2){
+        //std::cout<<"wait:"<<cnt<<std::endl;
+      }*/
     }
   }
   return reinterpret_cast<Cache::Handle*>(e);
 }
-
+int cnt = 0;
 void SkipListLRUCache::InsertThread() {
     while (true) {
       if(has_items.load(std::memory_order_acquire)){
         std::unique_lock<std::mutex> lock(queue_mutex_);
         while (!insert_queue_.empty()) {
+            /*if(insert_queue_.size() > 2){
+              //std::cout<<"count:"<<insert_queue_.size()<<std::endl;
+            }*/
             Node* e = insert_queue_.front();
+            assert(e->GetKV() != nullptr);
             insert_queue_.pop();
-            lock.unlock(); // 解锁以允许其他线程访问队列
+            lock.unlock();
 
             /*{
               MutexLock l(&list_mutex_);
@@ -755,10 +878,14 @@ void SkipListLRUCache::InsertThread() {
                 usage_ += e->charge;
               }
             }else{
-              std::cout<<"Duplicate insertion"<<std::endl;
+              //std::cout<<"Duplicate insertion"<<std::endl;
             }
 
             while (usage_ > capacity_ && lru_.cache_next != &lru_) {
+              cnt++;
+              if(cnt == 1){
+                std::cout<<"************>usage********"<<std::endl;
+              }
               Node* old = lru_.cache_next;
               assert(old->refs == 1);
               bool erased = FinishErase(table_.Remove(old));
@@ -766,7 +893,7 @@ void SkipListLRUCache::InsertThread() {
                 assert(erased);
               }
             }        
-            lock.lock(); // 重新加锁以检查队列
+            lock.lock(); 
         }
         has_items.store(false, std::memory_order_release);
       }
@@ -783,6 +910,7 @@ Cache::Handle* SkipListLRUCache::Insert(const Slice& key, void* value,
 // If e != nullptr, finish removing *e from the cache; it has already been
 // removed from the hash table.  Return whether e != nullptr.
 bool SkipListLRUCache::FinishErase(Node* e) {
+  MutexLock l(&list_mutex_);
   if (e != nullptr) {
     assert(e->in_cache);
     LRU_Remove(e);
@@ -793,12 +921,16 @@ bool SkipListLRUCache::FinishErase(Node* e) {
   return e != nullptr;
 }
 
-void SkipListLRUCache::Erase(const Slice& key) {
-  MutexLock l(&mutex_);
-  //[todo] only read-write mix called
+void SkipListLRUCache::Erase(const Slice& key){
+
+}
+
+void SkipListLRUCache::Erase(Node* e) {
+  FinishErase(table_.Remove(e));
 }
 
 void SkipListLRUCache::Prune() {
+  //retain
   MutexLock l(&mutex_);
   while (lru_.cache_next != &lru_) {
     Node* e = lru_.cache_next;
@@ -859,8 +991,12 @@ class LRUCacheWrapper : public Cache {
   }
 
   //[todo]
-  Iterator* NewIterator(const Slice& left_bound, const uint64_t& file_number) override {
-    return lru_cache_.NewCacheIterator(left_bound, file_number);
+  Iterator* NewIterator(const Slice& left_bound, const uint64_t& file_number, const int& which, bool* compaction_state) override {
+    return lru_cache_.NewCacheIterator(left_bound, file_number, which, compaction_state);
+  }
+
+  Iterator* NewIterator(const Slice& left_bound, const Slice& right_bound){
+    return lru_cache_.NewCacheIterator(left_bound, right_bound);
   }
 };
 

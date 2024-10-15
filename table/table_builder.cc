@@ -232,7 +232,7 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
     EncodeFixed32(cache_key_buffer, r->level_);
     memcpy(cache_key_buffer + sizeof(uint32_t), max_key.data(), max_key.size());
     Slice cache_key(cache_key_buffer, sizeof(cache_key_buffer));
-    //cache_handle = block_cache->Insert(cache_key, block_ptr, block_ptr->size(), &DeleteCachedBlock, min_key, r->file_number_);
+    cache_handle = block_cache->Insert(cache_key, block_ptr, block_ptr->size(), &DeleteCachedBlock, min_key, r->file_number_);
     if(cache_handle != nullptr){
       block_cache->Release(cache_handle);
     }

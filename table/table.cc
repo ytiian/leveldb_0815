@@ -321,13 +321,14 @@ Iterator* Table::NewIterator(const ReadOptions& options) const {
 }
 
 Iterator* Table::NewIterator(const ReadOptions& options, 
-    const Slice& left_bound, const Slice& right_bound, const int& level, const uint64_t& file_number) const {
+    const Slice& left_bound, const Slice& right_bound, const int& level, 
+    const uint64_t& file_number, const int& which, bool* compaction_state) const {
   Cache* block_cache = rep_->options.block_cache;
   char cache_key_buffer[sizeof(uint32_t) + left_bound.size()];
   EncodeFixed32(cache_key_buffer, level); 
   memcpy(cache_key_buffer + sizeof(uint32_t), left_bound.data(), left_bound.size());  
   Slice key(cache_key_buffer, sizeof(cache_key_buffer));
-  Iterator* cache_iter = block_cache->NewIterator(key, file_number);
+  Iterator* cache_iter = block_cache->NewIterator(key, file_number, which, compaction_state);
   cache_iter->Seek(key);
   //std::cout<<"cache_iter valid:"<<cache_iter->Valid()<<std::endl;
   //std::cout<<"cache_iter seek:"<< key.ToString() <<std::endl;

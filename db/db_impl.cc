@@ -1114,6 +1114,12 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   if (status.ok()) {
     status = InstallCompactionResults(compact);
   }
+  /*compact->compaction->SetStatePtr(false);
+  Slice smallest = compact->current_output()->smallest.Encode();
+  Slice largest = compact->current_output()->largest.Encode();
+  Cache* block_cache = options_.block_cache;
+  Iterator* cache_iter = block_cache->NewIterator(smallest, largest);
+  cache_iter->CleanRepeat();*/
   if (!status.ok()) {
     RecordBackgroundError(status);
   }

@@ -91,6 +91,9 @@ class LEVELDB_EXPORT Iterator {
   virtual void* TestAndReturn(Slice right_bound){
     return nullptr;
   }
+
+  virtual void CleanRepeat(){
+  }
   // Clients are allowed to register function/arg1/arg2 triples that
   // will be invoked when this iterator is destroyed.
   //

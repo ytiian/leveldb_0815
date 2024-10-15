@@ -373,6 +373,10 @@ class Compaction {
 
   bool IfInInputFiles(const uint64_t file_number);
 
+  bool* GetStatePtr() { return compaction_state_; }
+
+  void SetStatePtr(bool state) { *compaction_state_ = state; }
+
   Version* Get_version() { return input_version_; }
 
  private:
@@ -404,6 +408,8 @@ class Compaction {
   // higher level than the ones involved in this compaction (i.e. for
   // all L >= level_ + 2).
   size_t level_ptrs_[config::kNumLevels];
+
+  bool* compaction_state_;
 };
 
 }  // namespace leveldb

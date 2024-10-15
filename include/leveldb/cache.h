@@ -130,7 +130,11 @@ class LEVELDB_EXPORT Cache {
 
   virtual Slice Key(Handle* handle) const = 0;
 
-  virtual Iterator* NewIterator(const Slice& left_bound, const uint64_t& file_number) {
+  virtual Iterator* NewIterator(const Slice& left_bound, const uint64_t& file_number, const int& which, bool* compaction_state) {
+    return nullptr;
+  }
+
+  virtual Iterator* NewIterator(const Slice& left_bound, const Slice& right_bound) {
     return nullptr;
   }
 

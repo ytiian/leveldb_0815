@@ -165,8 +165,8 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
 class Version::LevelFileNumIterator : public Iterator {
  public:
   LevelFileNumIterator(const InternalKeyComparator& icmp,
-                       const std::vector<FileMetaData*>* flist, const int level)
-      : icmp_(icmp), flist_(flist), index_(flist->size()), level_(level) {  // Marks as invalid
+                       const std::vector<FileMetaData*>* flist, const int level = 0, const int which = 0, bool* compaction_state = nullptr)
+      : icmp_(icmp), flist_(flist), index_(flist->size()), level_(level), which_(which), compaction_state_(compaction_state) {  // Marks as invalid
   }
   bool Valid() const override { return index_ < flist_->size(); }
   void Seek(const Slice& target) override {
@@ -205,6 +205,8 @@ class Version::LevelFileNumIterator : public Iterator {
     EncodeFixed64(value_buf_, (*flist_)[index_]->number);
     EncodeFixed64(value_buf_ + 8, (*flist_)[index_]->file_size);
     EncodeFixed32(value_buf_ + 16, level_);
+    EncodeFixed32(value_buf_ + 20, which_);
+    EncodeFixed64(value_buf_ + 24, reinterpret_cast<uint64_t>(compaction_state_));
     return Slice(value_buf_, sizeof(value_buf_));
   }
   Status status() const override { return Status::OK(); }
@@ -214,9 +216,10 @@ class Version::LevelFileNumIterator : public Iterator {
   const std::vector<FileMetaData*>* const flist_;
   uint32_t index_;
   const uint32_t level_;
-
+  const int which_;
+  bool* compaction_state_;
   // Backing store for value().  Holds the file number and size.
-  mutable char value_buf_[20];
+  mutable char value_buf_[32];
 };
 
 static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
@@ -224,20 +227,21 @@ static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
                                  const Slice& right_bound, 
                                  const CallerType& caller = CallerType::kCallerTypeUnknown) {
   TableCache* cache = reinterpret_cast<TableCache*>(arg);
-  if (file_value.size() != 20) {
+  if (file_value.size() != 32) {
     return NewErrorIterator(
         Status::Corruption("FileReader invoked with unexpected value"));
   } else {
     return cache->NewIterator(options, DecodeFixed64(file_value.data()),
                               DecodeFixed64(file_value.data() + 8), 
-                              left_bound, right_bound, DecodeFixed32(file_value.data() + 16));
+                              left_bound, right_bound, DecodeFixed32(file_value.data() + 16), 
+                              DecodeFixed32(file_value.data() + 20), (bool*)DecodeFixed64(file_value.data() + 24));
   }
 }
 
 Iterator* Version::NewConcatenatingIterator(const ReadOptions& options,
                                             int level) const {
   return NewTwoLevelIterator(
-      new LevelFileNumIterator(vset_->icmp_, &files_[level], level), &GetFileIterator,
+      new LevelFileNumIterator(vset_->icmp_, &files_[level]), &GetFileIterator,
       vset_->table_cache_, options);
 }
 
@@ -327,6 +331,25 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
   //std::cout<<internal_key.ToString()<<std::endl;
   //PrintLast64Bits(internal_key.ToString());
   const Comparator* ucmp = vset_->icmp_.user_comparator();
+  //level 1
+  while(true) {
+    FileMetaData* f = nullptr;
+    {
+      std::unique_lock<std::mutex> lock(interState_files_mutex_);
+      if(interState_files_.empty()) {
+        break;
+      }
+      f = interState_files_.front();
+      interState_files_.pop();
+    }
+    if(ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0){ 
+      continue;
+    }
+    if (!(*ReadUseIO)(arg, 1, f, ucmp)) { //false means stop searching
+      return;
+    }
+  }
+
   for (int level = 1; level < config::kNumLevels; level++){
     size_t num_files = files_[level].size();
     if (num_files == 0) continue;
@@ -339,26 +362,6 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
     //std::cout<<if_search<<std::endl;
     if(if_search){
       continue;
-    }
-
-    if(level == 1){
-      while(true) {
-        FileMetaData* f = nullptr;
-        {
-          std::unique_lock<std::mutex> lock(interState_files_mutex_);
-          if(interState_files_.empty()) {
-            break;
-          }
-          f = interState_files_.front();
-          interState_files_.pop();
-        }
-        if(ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0){ 
-          continue;
-        }
-        if (!(*ReadUseIO)(arg, level, f, ucmp)) { //false means stop searching
-          return;
-        }
-      }
     }
 
     uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);
@@ -1385,7 +1388,7 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
       } else {
         // Create concatenating iterator for the files from this level
         list[num++] = NewTwoLevelIterator(
-            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which], c->level() + which),
+            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which], c->level() + which, which, c->GetStatePtr()),
             &GetFileIterator, table_cache_, options);
       }
     }
@@ -1635,6 +1638,7 @@ Compaction::Compaction(const Options* options, int level)
   for (int i = 0; i < config::kNumLevels; i++) {
     level_ptrs_[i] = 0;
   }
+  compaction_state_ = new bool(true);
 }
 
 Compaction::~Compaction() {
