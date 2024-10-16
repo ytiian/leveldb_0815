@@ -136,7 +136,7 @@ static bool FLAGS_cache_monitor = false;
 
 static int FLAGS_report_interval_seconds = 0;//"If greater than zero, it will write simple stats in CSV format to --report_file every N seconds");
 
-static const char* FLAGS_report_file = "/home/zytian/leveldb_0815/report.csv";
+static const char* FLAGS_report_file = "/home/zytian/leveldb_baseline/report.csv";
 
 static bool FLAGS_disable_auto_compaction = false;
 

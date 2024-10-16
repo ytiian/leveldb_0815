@@ -35,10 +35,14 @@
 #include "port/thread_annotations.h"
 #include "util/env_posix_test_helper.h"
 #include "util/posix_logger.h"
+#include "util/aligned_buffer.h"
 
 namespace leveldb {
 
 namespace {
+
+const size_t kDefaultPageSize = 4 * 1024;
+using AlignedBuf = std::unique_ptr<char[]>;
 
 // Set by EnvPosixTestHelper::SetReadOnlyMMapLimit() and MaxOpenFiles().
 int g_open_read_only_file_limit = -1;
@@ -196,11 +200,113 @@ class PosixRandomAccessFile final : public RandomAccessFile {
     }
   }
 
-  Status Read(uint64_t offset, size_t n, Slice* result,
-              char* scratch) const override {
+  size_t GetRequiredBufferAlignment() const {
+    return kDefaultPageSize;
+  }
+
+  Status Read(uint64_t offset, size_t n, Slice* result, char* scratch) const override {                                    
+    AlignedBuf* aligned_buf = new AlignedBuf();
+    (void)aligned_buf;
+    // To be paranoid: modify scratch a little bit, so in case underlying
+    // FileSystem doesn't fill the buffer but return success and `scratch` returns
+    // contains a previous block, returned value will not pass checksum.
+    if (n > 0 && scratch != nullptr) {
+      // This byte might not change anything for direct I/O case, but it's OK.
+      scratch[0]++;
+    }
+
+    Status s;
+    //uint64_t elapsed = 0;
+    size_t alignment = GetRequiredBufferAlignment();
+    bool is_aligned = false;
+    if (scratch != nullptr) {
+      // Check if offset, length and buffer are aligned.
+      is_aligned = (offset & (alignment - 1)) == 0 &&
+                  (n & (alignment - 1)) == 0 &&
+                  (uintptr_t(scratch) & (alignment - 1)) == 0;
+    }
+
+    if (is_aligned == false) {
+      size_t aligned_offset =
+          TruncateToPageBoundary(alignment, static_cast<size_t>(offset));
+      size_t offset_advance = static_cast<size_t>(offset) - aligned_offset;
+      size_t read_size =
+          Roundup(static_cast<size_t>(offset + n), alignment) - aligned_offset;
+      AlignedBuffer buf;
+      buf.Alignment(alignment);
+      buf.AllocateNewBuffer(read_size);
+      while (buf.CurrentSize() < read_size) {
+        size_t allowed;
+        assert(buf.CurrentSize() == 0);
+        allowed = read_size;
+
+        Slice tmp;
+        uint64_t orig_offset = 0;
+
+        s = ReadRaw(aligned_offset + buf.CurrentSize(), allowed, 
+                            &tmp, buf.Destination());
+
+        buf.Size(buf.CurrentSize() + tmp.size());
+        if (!s.ok() || tmp.size() < allowed) {
+          break;
+        }
+      }
+
+      size_t res_len = 0;
+      if (s.ok() && offset_advance < buf.CurrentSize()) {
+        res_len = std::min(buf.CurrentSize() - offset_advance, n);
+        if (aligned_buf == nullptr) {
+          buf.Read(scratch, offset_advance, res_len);
+        } else {
+          scratch = buf.BufferStart() + offset_advance;
+          char* raw_ptr = buf.Release();
+          assert(raw_ptr != nullptr);
+          aligned_buf->reset(raw_ptr);
+          //aligned_buf->reset(buf.Release());
+        }
+      }
+      *result = Slice(scratch, res_len);
+    } else {
+      size_t pos = 0;
+      const char* res_scratch = nullptr;
+      while (pos < n) {
+        size_t allowed;
+        allowed = n;
+
+        Slice tmp_result;
+
+        // Only user reads are expected to specify a timeout. And user reads
+        // are not subjected to rate_limiter and should go through only
+        // one iteration of this loop, so we don't need to check and adjust
+        // the opts.timeout before calling file_->Read
+
+        s = ReadRaw(offset + pos, allowed, &tmp_result,
+                            scratch + pos);
+
+        if (res_scratch == nullptr) {
+          // we can't simply use `scratch` because reads of mmap'd files return
+          // data in a different buffer.
+          res_scratch = tmp_result.data();
+        } else {
+          // make sure chunks are inserted contiguously into `res_scratch`.
+          assert(tmp_result.data() == res_scratch + pos);
+        }
+        pos += tmp_result.size();
+        if (!s.ok() || tmp_result.size() < allowed) {
+          break;
+        }
+      }
+      *result = Slice(res_scratch, s.ok() ? pos : 0);
+    }
+
+    return s;
+  }
+
+  Status ReadRaw(uint64_t offset, size_t n, Slice* result,
+              char* scratch) const {
     int fd = fd_;
     if (!has_permanent_fd_) {
-      fd = ::open(filename_.c_str(), O_RDONLY | kOpenBaseFlags);
+      fd = ::open(filename_.c_str(), O_RDONLY | O_DIRECT | kOpenBaseFlags);
       if (fd < 0) {
         return PosixError(filename_, errno);
       }
@@ -540,21 +646,21 @@ class PosixEnv : public Env {
   Status NewRandomAccessFile(const std::string& filename,
                              RandomAccessFile** result) override {
     *result = nullptr;
-    int fd = ::open(filename.c_str(), O_RDONLY | kOpenBaseFlags);
+    int fd = ::open(filename.c_str(), O_RDONLY | O_DIRECT | kOpenBaseFlags);
     if (fd < 0) {
       return PosixError(filename, errno);
     }
 
-    if (!mmap_limiter_.Acquire()) {
-      *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
-      return Status::OK();
-    }
+    //if (!mmap_limiter_.Acquire()) {
+    *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
+    return Status::OK();
+    //}
 
-    uint64_t file_size;
+    /*uint64_t file_size;
     Status status = GetFileSize(filename, &file_size);
     if (status.ok()) {
       void* mmap_base =
-          ::mmap(/*addr=*/nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
+          ::mmap(/*addr=*//*nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
       if (mmap_base != MAP_FAILED) {
         *result = new PosixMmapReadableFile(filename,
                                             reinterpret_cast<char*>(mmap_base),
@@ -567,7 +673,7 @@ class PosixEnv : public Env {
     if (!status.ok()) {
       mmap_limiter_.Release();
     }
-    return status;
+    return status;*/
   }
 
   Status NewWritableFile(const std::string& filename,
