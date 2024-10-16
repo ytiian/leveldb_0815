@@ -255,11 +255,13 @@ class SkipListBase { //Skiplist
     Node* x = nullptr;
     int key_level = DecodeFixed32(key.data());
 
-    SkipListAccessor accessor(sl_);
-    Node tmp(key);
-    SkipListT::iterator iter = accessor.lower_bound(&tmp);
-    if(iter != accessor.end()){
-      x = *iter;
+    {
+      SkipListAccessor accessor(sl_);
+      Node tmp(key);
+      SkipListT::iterator iter = accessor.lower_bound(&tmp);
+      if(iter != accessor.end()){
+        x = *iter;
+      }
     }
 
     if(x != nullptr && key_level == 0){
@@ -294,8 +296,11 @@ class SkipListBase { //Skiplist
   }
 
   Node* Remove(Node* e){
-    SkipListAccessor accessor(sl_);
-    auto ret = accessor.erase(e);
+    bool ret;
+    {
+      SkipListAccessor accessor(sl_);
+      ret = accessor.erase(e);
+    }
     if(ret){
       return e;
     }else{
