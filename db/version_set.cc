@@ -321,6 +321,25 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
   }
 }
 
+Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, std::string* value, 
+        const Slice& reminder_result){
+  Saver saver;
+  saver.state = kNotFound;
+  saver.ucmp = vset_->icmp_.user_comparator();
+  saver.user_key = k.user_key();
+  saver.value = value;  
+  Slice input = reminder_result;
+  uint64_t number, offset, size;
+  GetVarint64(&input, &number); 
+  for(uint32_t i = 0; i < files_[0].size(); i++){
+    FileMetaData* f = files_[0][i];
+    if(f->number == number){
+      vset_->table_cache_->Get(options, f->number, f->file_size, k.internal_key(), &saver, reminder_result, SaveValue);
+      return Status::OK();
+    }
+  }  
+}
+
 Status Version::Get(const ReadOptions& options, const LookupKey& k,
                     std::string* value, GetStats* stats) {
   stats->seek_file = nullptr;
@@ -989,6 +1008,46 @@ Status VersionSet::Recover(bool* save_manifest) {
   }
 
   return s;
+}
+
+static bool OldestFirst(FileMetaData* a, FileMetaData* b) {
+  return a->number < b->number;
+}
+
+Status VersionSet::RecoverL0Reminder(L0_Reminder* l0_reminder){
+  if(current_->files_[0].size() == 0){
+    return Status::OK();
+  }
+
+  const std::vector<FileMetaData*>& tmp = current_->files_[0];
+  int size = tmp.size();
+  std::vector<FileMetaData*> files;
+  for(int i = 0; i < size; i++){
+    files.push_back(tmp[i]);
+  }
+  std::sort(files.begin(), files.end(), OldestFirst);
+  Iterator* l0file_iter;
+  for(int i = 0; i < size; i++){
+    std::cout<<"recover: "<<files[i]->number<<std::endl;
+    l0file_iter = table_cache_->NewIterator(ReadOptions(), files[i]->number, files[i]->file_size);
+    TwoLevelIterator* two_level_iter = static_cast<TwoLevelIterator*>(l0file_iter);
+    two_level_iter->SeekToFirst();
+    Slice handle;
+    while(two_level_iter->Valid()){
+      uint64_t offset;
+      uint64_t size;
+      Slice key = two_level_iter->keyAndHandle(&offset, &size);
+      std::string buf;
+      PutVarint64(&buf, files[i]->number);
+      PutVarint64(&buf, offset);
+      PutVarint64(&buf, size);
+      Slice value(buf);
+      l0_reminder->WriteToReminder(key, value);
+      two_level_iter->Next();
+    }
+    delete two_level_iter;
+  }
+  return Status::OK();
 }
 
 bool VersionSet::ReuseManifest(const std::string& dscname,

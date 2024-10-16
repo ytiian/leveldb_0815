@@ -151,6 +151,8 @@ target_sources(leveldb
     "db/version_set.h"
     "db/write_batch_internal.h"
     "db/write_batch.cc"
+    "db/L0_reminder.h"
+    "db/L0_reminder.cc"
     "port/port_stdcxx.h"
     "port/port.h"
     "port/thread_annotations.h"

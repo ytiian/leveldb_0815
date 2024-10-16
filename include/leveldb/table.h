@@ -74,6 +74,11 @@ class LEVELDB_EXPORT Table {
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
 
+  Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
+                     const Slice& reminder_result,
+                     void (*handle_result)(void* arg, const Slice& k,
+                                           const Slice& v));
+
   void ReadMeta(const Footer& footer);
   void ReadFilter(const Slice& filter_handle_value);
 

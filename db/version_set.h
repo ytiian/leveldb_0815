@@ -75,6 +75,9 @@ class Version {
   Status Get(const ReadOptions&, const LookupKey& key, std::string* val,
              GetStats* stats);
 
+  Status GetWithReminder(const ReadOptions& options, const LookupKey& k, 
+            std::string* value, const Slice& reminder_result);
+
   // Adds "stats" into the current state.  Returns true if a new
   // compaction may need to be triggered, false otherwise.
   // REQUIRES: lock is held
@@ -184,6 +187,7 @@ class VersionSet {
   // Recover the last saved descriptor from persistent storage.
   Status Recover(bool* save_manifest);
 
+  Status RecoverL0Reminder(L0_Reminder* L0_Reminder);
   // Return the current version.
   Version* current() const { return current_; }
 
@@ -356,6 +360,8 @@ class Compaction {
   // Release the input version for the compaction, once the compaction
   // is successful.
   void ReleaseInputs();
+
+  bool IfInInputFiles(const uint64_t file_number);
 
  private:
   friend class Version;

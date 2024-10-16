@@ -15,11 +15,15 @@
 #include "table/format.h"
 #include "util/coding.h"
 #include "util/crc32c.h"
+#include "table/block.h"
+#include "leveldb/cache.h"
+#include "db/L0_reminder.h"
 
 namespace leveldb {
 
 struct TableBuilder::Rep {
-  Rep(const Options& opt, WritableFile* f)
+  Rep(const Options& opt, WritableFile* f, const uint32_t& level, const bool& is_compaction_output, 
+                            const uint64_t& file_number, L0_Reminder* l0_reminder)
       : options(opt),
         index_block_options(opt),
         file(f),
@@ -28,6 +32,11 @@ struct TableBuilder::Rep {
         index_block(&index_block_options),
         num_entries(0),
         closed(false),
+        level_(level),
+        is_compaction_output_(is_compaction_output),
+        from_cache_(false),
+        l0_reminder_(l0_reminder),
+        file_number_(file_number),
         filter_block(opt.filter_policy == nullptr
                          ? nullptr
                          : new FilterBlockBuilder(opt.filter_policy)),
@@ -35,6 +44,7 @@ struct TableBuilder::Rep {
     index_block_options.block_restart_interval = 1;
   }
 
+  L0_Reminder* l0_reminder_;
   Options options;
   Options index_block_options;
   WritableFile* file;
@@ -42,10 +52,15 @@ struct TableBuilder::Rep {
   Status status;
   BlockBuilder data_block;
   BlockBuilder index_block;
+  const uint32_t level_;
+  const uint64_t file_number_;
+  const bool is_compaction_output_;
+  bool from_cache_;
   std::string last_key;
   int64_t num_entries;
   bool closed;  // Either Finish() or Abandon() has been called.
   FilterBlockBuilder* filter_block;
+  std::queue<std::string> keys_;
 
   // We do not emit the index entry for a block until we have seen the
   // first key for the next data block.  This allows us to use shorter
@@ -62,8 +77,10 @@ struct TableBuilder::Rep {
   std::string compressed_output;
 };
 
-TableBuilder::TableBuilder(const Options& options, WritableFile* file)
-    : rep_(new Rep(options, file)) {
+TableBuilder::TableBuilder(const Options& options, WritableFile* file, 
+                          const uint32_t& level, const bool& is_compaction_output_,
+                          const uint64_t& file_number, L0_Reminder* l0_reminder)
+    : rep_(new Rep(options, file, level, is_compaction_output_, file_number, l0_reminder)) {
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
@@ -73,6 +90,14 @@ TableBuilder::~TableBuilder() {
   assert(rep_->closed);  // Catch errors where caller forgot to call Finish()
   delete rep_->filter_block;
   delete rep_;
+}
+
+bool TableBuilder::IfFromCache(){
+  return rep_-> from_cache_;
+}
+
+void TableBuilder::SetFromCache() {
+  rep_-> from_cache_ = true;
 }
 
 Status TableBuilder::ChangeOptions(const Options& options) {
@@ -101,6 +126,40 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
+    //changes *start to a short string in [start,limit).
+    r->options.comparator->FindShortestSeparator(&r->last_key, key);
+    std::string handle_encoding;
+    r->pending_handle.EncodeTo(&handle_encoding);
+    r->index_block.Add(r->last_key, Slice(handle_encoding));
+    r->pending_index_entry = false;
+  }
+
+  if (r->filter_block != nullptr) {
+    r->filter_block->AddKey(key);
+  }
+
+  r->last_key.assign(key.data(), key.size());
+  r->num_entries++;
+  r->data_block.Add(key, value);
+  if(r->l0_reminder_ != nullptr){
+    r->keys_.push(key.ToString());
+  }
+
+  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  if (estimated_block_size >= r->options.block_size) {
+    Flush();
+  }
+}
+
+/*uint64_t TableBuilder::AddAndUpdateReminder(const Slice& key, const Slice& value, L0_Reminder* l0_reminder) {
+  Rep* r = rep_;
+  assert(!r->closed);
+  if (r->num_entries > 0) {
+    assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
+  }
+
+  if (r->pending_index_entry) {
+    assert(r->data_block.empty());
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
     std::string handle_encoding;
     r->pending_handle.EncodeTo(&handle_encoding);
@@ -116,11 +175,14 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   r->num_entries++;
   r->data_block.Add(key, value);
 
+  uint64_t location = r->offset;
+
   const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
   if (estimated_block_size >= r->options.block_size) {
     Flush();
   }
-}
+  return location;
+}*/
 
 void TableBuilder::Flush() {
   Rep* r = rep_;
@@ -128,7 +190,7 @@ void TableBuilder::Flush() {
   if (!ok()) return;
   if (r->data_block.empty()) return;
   assert(!r->pending_index_entry);
-  WriteBlock(&r->data_block, &r->pending_handle);
+  WriteBlock(&r->data_block, &r->pending_handle, true);
   if (ok()) {
     r->pending_index_entry = true;
     r->status = r->file->Flush();
@@ -138,7 +200,12 @@ void TableBuilder::Flush() {
   }
 }
 
-void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
+static void DeleteCachedBlock(const Slice& key, void* value) {
+  Block* block = reinterpret_cast<Block*>(value);
+  delete block;
+}
+
+void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bool& is_data_block) {
   // File format contains a sequence of blocks where each block has:
   //    block_data: uint8[n]
   //    type: uint8
@@ -146,6 +213,33 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   assert(ok());
   Rep* r = rep_;
   Slice raw = block->Finish();
+  if(r->is_compaction_output_ && is_data_block && r->from_cache_){
+    //std::cout<<"Insert compaction output block to cache"<<std::endl;
+    char* buf = new char[raw.size()];
+    memcpy(buf, raw.data(), raw.size());
+    Slice block_contents(buf, raw.size());
+    BlockContents contents;
+    contents.data = block_contents;
+    contents.cachable = true;
+    contents.heap_allocated = true;
+    Block* block_ptr = new Block(contents);
+    Cache* block_cache = r->options.block_cache;
+    Cache::Handle* cache_handle = nullptr;
+    //...minkey\maxkey
+    Slice max_key(block->LargestKey());
+    Slice min_key(block->SmallestKey());
+    char cache_key_buffer[sizeof(uint32_t) + max_key.size()];
+    EncodeFixed32(cache_key_buffer, r->level_);
+    memcpy(cache_key_buffer + sizeof(uint32_t), max_key.data(), max_key.size());
+    Slice cache_key(cache_key_buffer, sizeof(cache_key_buffer));
+    //cache_handle = block_cache->Insert(cache_key, block_ptr, block_ptr->size(), &DeleteCachedBlock, min_key, r->file_number_);
+    if(cache_handle != nullptr){
+      block_cache->Release(cache_handle);
+    }
+  }
+  /*else{
+    std::cout<<"Not insert compaction output block to cache"<<std::endl;
+  }*/
 
   Slice block_contents;
   CompressionType type = r->options.compression;
@@ -184,14 +278,27 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
       break;
     }
   }
-  WriteRawBlock(block_contents, type, handle);
+  WriteRawBlock(block_contents, type, handle, is_data_block); 
   r->compressed_output.clear();
+  r->from_cache_ = false;
   block->Reset();
 }
 
 void TableBuilder::WriteRawBlock(const Slice& block_contents,
-                                 CompressionType type, BlockHandle* handle) {
+                                 CompressionType type, BlockHandle* handle,
+                                 const bool& is_data_block) {
   Rep* r = rep_;
+  if(is_data_block){
+    while(!r->keys_.empty()){
+      std::string buf;
+      PutVarint64(&buf, r->file_number_);
+      PutVarint64(&buf, r->offset);
+      PutVarint64(&buf, block_contents.size());
+      const Slice& key = r->keys_.front();
+      r->l0_reminder_->WriteToReminder(key, Slice(buf));
+      r->keys_.pop();
+    }
+  }
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
   r->status = r->file->Append(block_contents);

@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include<iostream>
 
 #include "leveldb/comparator.h"
 #include "leveldb/options.h"
@@ -50,6 +51,8 @@ void BlockBuilder::Reset() {
   counter_ = 0;
   finished_ = false;
   last_key_.clear();
+  largest_key_.clear();
+  smallest_key_.clear();
 }
 
 size_t BlockBuilder::CurrentSizeEstimate() const {
@@ -69,7 +72,12 @@ Slice BlockBuilder::Finish() {
 }
 
 void BlockBuilder::Add(const Slice& key, const Slice& value) {
+  if(smallest_key_.empty()){
+    smallest_key_ = key.ToString();
+  }
+  largest_key_ = key.ToString();
   Slice last_key_piece(last_key_);
+  
   assert(!finished_);
   assert(counter_ <= options_->block_restart_interval);
   assert(buffer_.empty()  // No values yet?

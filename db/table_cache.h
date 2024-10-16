@@ -44,6 +44,11 @@ class TableCache {
              uint64_t file_size, const Slice& k, void* arg,
              void (*handle_result)(void*, const Slice&, const Slice&));
 
+  Status Get(const ReadOptions& options, uint64_t file_number,
+             uint64_t file_size, const Slice& k, void* arg,
+             const Slice& reminder_result,
+             void (*handle_result)(void*, const Slice&, const Slice&));
+
   // Evict any entry for the specified file number
   void Evict(uint64_t file_number);
 

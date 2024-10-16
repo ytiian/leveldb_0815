@@ -245,6 +245,24 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
   return s;
 }
 
+Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
+                          const Slice& reminder_result,
+                          void (*handle_result)(void*, const Slice&,
+                                                const Slice&)) {
+  Status s;
+  Slice input = reminder_result;
+  uint64_t number, offset, size;
+  GetVarint64(&input, &number);
+  Iterator* block_iter = BlockReader(this, options, input, CallerType::kGet);
+  block_iter->Seek(k);
+  if (block_iter->Valid()) {
+    (*handle_result)(arg, block_iter->key(), block_iter->value());
+  }
+  s = block_iter->status();
+  delete block_iter;
+  return s;
+}
+
 uint64_t Table::ApproximateOffsetOf(const Slice& key) const {
   Iterator* index_iter =
       rep_->index_block->NewIterator(rep_->options.comparator);
