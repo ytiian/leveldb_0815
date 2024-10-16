@@ -74,15 +74,16 @@ class LEVELDB_EXPORT Cache {
   //
   // When the inserted entry is no longer needed, the key and
   // value will be passed to "deleter".
-  virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
-                         void (*deleter)(const Slice& key, void* value)) = 0;
 
+  virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
+                         void (*deleter)(const Slice& key, void* value), 
+                         const bool& dual_insert = false, const Slice& min_key = Slice(), const uint64_t& file_number = 0) = 0;
   // If the cache has no mapping for "key", returns nullptr.
   //
   // Else return a handle that corresponds to the mapping.  The caller
   // must call this->Release(handle) when the returned mapping is no
   // longer needed.
-  virtual Handle* Lookup(const Slice& key) = 0;
+  virtual Handle* Lookup(const Slice& key, const bool& is_skiplist = false) = 0;
 
   // Release a mapping returned by a previous Lookup().
   // REQUIRES: handle must not have been released yet.

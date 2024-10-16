@@ -17,7 +17,7 @@ endif(NOT CMAKE_C_STANDARD)
 # C++ standard can be overridden when this is used as a sub-project.
 if(NOT CMAKE_CXX_STANDARD)
   # This project requires C++11.
-  set(CMAKE_CXX_STANDARD 11)
+  set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
   set(CMAKE_CXX_EXTENSIONS OFF)
 endif(NOT CMAKE_CXX_STANDARD)
@@ -194,6 +194,7 @@ target_sources(leveldb
     "util/status.cc"
     "util/zipf.h"
     "util/aligned_buffer.h"
+    "util/dual_cache.cc"
 
   # Only CMake 3.3+ supports PUBLIC sources in targets exported by "install".
   $<$<VERSION_GREATER:CMAKE_VERSION,3.2>:PUBLIC>
@@ -289,6 +290,26 @@ endif(HAVE_TCMALLOC)
 # Needed by port_stdcxx.h
 find_package(Threads REQUIRED)
 target_link_libraries(leveldb Threads::Threads)
+
+# 手动设置 Glog 库路径
+set(GLOG_INCLUDE_DIRS "/usr/include/glog")
+set(GLOG_LIBRARIES "/usr/lib/x86_64-linux-gnu/libglog.so")
+
+# 设置 fmt 库路径
+set(FMT_INCLUDE_DIRS "/usr/local/include/fmt")
+set(FMT_LIBRARIES "/usr/local/lib/libfmt.a")
+
+# 设置 folly 库路径
+set(FOLLY_INCLUDE_DIRS "/usr/local/include/folly")
+set(FOLLY_LIBRARIES "/usr/local/lib/libfolly.a")
+
+# 包含头文件目录
+include_directories(${GLOG_INCLUDE_DIRS})
+include_directories(${FMT_INCLUDE_DIRS})
+include_directories(${FOLLY_INCLUDE_DIRS})
+
+# 链接必要的库到 leveldb 目标
+target_link_libraries(leveldb ${FOLLY_LIBRARIES} ${GLOG_LIBRARIES} ${FMT_LIBRARIES})
 
 add_executable(leveldbutil
   "db/leveldbutil.cc"
