@@ -15,6 +15,8 @@
 #include "table/format.h"
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
+#include "db/dbformat.h"
+#include "db/saver.h"
 
 namespace leveldb {
 
@@ -176,15 +178,15 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
         block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
         block_cache -> IncrementCacheHits(caller_type);
       } else {
-        s = ReadBlock(table->rep_->file, options, handle, &contents);
-        block_cache -> IncrementCacheMisses(caller_type);
-        if (s.ok()) {
-          block = new Block(contents);
-          if (contents.cachable && options.fill_cache) {
-            cache_handle = block_cache->Insert(key, block, block->size(),
-                                               &DeleteCachedBlock);
-            block_cache -> IncrementCacheInsert(caller_type);
-          }
+          s = ReadBlock(table->rep_->file, options, handle, &contents);
+          block_cache -> IncrementCacheMisses(caller_type);
+          if (s.ok()) {
+            block = new Block(contents);
+            if (contents.cachable && options.fill_cache) {
+              cache_handle = block_cache->Insert(key, block, block->size(),
+                                                &DeleteCachedBlock);
+              block_cache -> IncrementCacheInsert(caller_type);
+            }
         }
       }
     } else {
@@ -209,16 +211,77 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   return iter;
 }
 
+Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
+                             const Slice& index_value, void* sv, const int& level, const CallerType& caller_type) {
+  Saver* saver = reinterpret_cast<Saver*>(sv);
+  Table* table = reinterpret_cast<Table*>(arg);
+  Cache* block_cache = table->rep_->options.block_cache;
+  Block* block = nullptr;
+  Cache::Handle* cache_handle = nullptr;
+
+  BlockHandle handle;
+  Slice input = index_value;
+  Status s = handle.DecodeFrom(&input);
+  // We intentionally allow extra stuff in index_value so that we
+  // can add more features in the future.
+
+  if (s.ok()) {
+    BlockContents contents;
+    if (block_cache != nullptr) {
+      char cache_key_buffer[16];
+      EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
+      EncodeFixed64(cache_key_buffer + 8, handle.offset());
+      Slice key(cache_key_buffer, sizeof(cache_key_buffer));
+      cache_handle = block_cache->Lookup(key);
+      if (cache_handle != nullptr) {
+        block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
+        saver->status[level].store(SEARCH_FOUND_BLOCK, std::memory_order_seq_cst);
+        block_cache -> IncrementCacheHits(caller_type);
+      } else {
+        while(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_BEGIN_CACHE_SEARCH){}
+        if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NEED_IO){
+          s = ReadBlock(table->rep_->file, options, handle, &contents);
+          block_cache -> IncrementCacheMisses(caller_type);
+          if (s.ok()) {
+            block = new Block(contents);
+            if (contents.cachable && options.fill_cache) {
+              cache_handle = block_cache->Insert(key, block, block->size(),
+                                                &DeleteCachedBlock);
+              block_cache -> IncrementCacheInsert(caller_type);
+            }
+          }
+        } else{
+          cache_handle = saver->cache_handle;
+          block_cache -> AddRef(cache_handle);
+        }
+      }
+    }
+  }
+  Iterator* iter;
+  if (block != nullptr) {
+    iter = block->NewIterator(table->rep_->options.comparator);
+    if (cache_handle == nullptr) {
+      iter->RegisterCleanup(&DeleteBlock, block, nullptr);
+    } else {
+      iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
+    }
+  } else {
+    iter = NewErrorIterator(s);
+  }
+  return iter;
+}
+
 Iterator* Table::NewIterator(const ReadOptions& options) const {
   return NewTwoLevelIterator(
       rep_->index_block->NewIterator(rep_->options.comparator),
       &Table::BlockReader, const_cast<Table*>(this), options);
 }
 
-Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
+Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg, const int& level,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)) {
   Status s;
+  Saver* saver = reinterpret_cast<Saver*>(arg);
   Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
   iiter->Seek(k);
   if (iiter->Valid()) {
@@ -227,9 +290,10 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
     BlockHandle handle;
     if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
         !filter->KeyMayMatch(handle.offset(), k)) {
+        saver->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
       // Not found
     } else {
-      Iterator* block_iter = BlockReader(this, options, iiter->value(), CallerType::kGet);
+      Iterator* block_iter = BlockReader(this, options, iiter->value(), arg, level, CallerType::kGet);
       block_iter->Seek(k);
       if (block_iter->Valid()) {
         (*handle_result)(arg, block_iter->key(), block_iter->value());
@@ -237,6 +301,8 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
       s = block_iter->status();
       delete block_iter;
     }
+  } else{
+    saver->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
   }
   if (s.ok()) {
     s = iiter->status();

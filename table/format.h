@@ -12,6 +12,14 @@
 #include "leveldb/status.h"
 #include "leveldb/table_builder.h"
 
+#define SEARCH_NO_STATUS 0
+#define SEARCH_FOUND 1
+#define SEARCH_NEED_IO 2
+#define SEARCH_BEGIN_CACHE_SEARCH 3
+#define SEARCH_INIT 4
+#define SEARCH_NOT_FOUND 5
+#define SEARCH_FOUND_BLOCK 6
+
 namespace leveldb {
 
 class Block;

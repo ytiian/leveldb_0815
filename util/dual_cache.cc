@@ -275,6 +275,11 @@ class SkipListBase { //Skiplist
 
 };
 
+SkipListBase::SkipListBase(CacheComparator cmp, Arena* arena)
+    : compare_(cmp),
+      arena_(arena),
+      sl_(SkipListT::createInstance()) {}
+
 class HandleTable {
  public:
   HandleTable() : length_(0), elems_(0), list_(nullptr) { Resize(); }
@@ -644,6 +649,10 @@ class ShardedDualCache : public Cache {
   void Release(Handle* handle) override {
     LRUHandle* h = reinterpret_cast<LRUHandle*>(handle);
     shard_[Shard(h->hash)].Release(handle);
+  }
+  void AddRef(Handle* handle) override {
+    LRUHandle* h = reinterpret_cast<LRUHandle*>(handle);
+    shard_[Shard(h->hash)].AddRef(handle);
   }
   void Erase(const Slice& key) override {
     const uint32_t hash = HashSlice(key);

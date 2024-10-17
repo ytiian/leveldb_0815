@@ -153,6 +153,7 @@ target_sources(leveldb
     "db/write_batch.cc"
     "db/L0_reminder.h"
     "db/L0_reminder.cc"
+    "db/saver.h"
     "port/port_stdcxx.h"
     "port/port.h"
     "port/thread_annotations.h"
@@ -195,6 +196,14 @@ target_sources(leveldb
     "util/zipf.h"
     "util/aligned_buffer.h"
     "util/dual_cache.cc"
+    "util/thpool.h"
+    "util/thpool.cc"
+    "util/affinity.h"
+    "util/lsm_mutex.h"
+    "util/cpumap.h"
+    "util/defs.h"
+    "util/cpumap.cc"
+    "util/bitops.h"
 
   # Only CMake 3.3+ supports PUBLIC sources in targets exported by "install".
   $<$<VERSION_GREATER:CMAKE_VERSION,3.2>:PUBLIC>
@@ -310,6 +319,9 @@ include_directories(${FOLLY_INCLUDE_DIRS})
 
 # 链接必要的库到 leveldb 目标
 target_link_libraries(leveldb ${FOLLY_LIBRARIES} ${GLOG_LIBRARIES} ${FMT_LIBRARIES})
+
+find_library(NUMA_LIB numa)
+target_link_libraries(leveldb ${NUMA_LIB})
 
 add_executable(leveldbutil
   "db/leveldbutil.cc"

@@ -23,6 +23,7 @@
 #include "db/version_edit.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
+#include "util/thpool.h"
 
 namespace leveldb {
 
@@ -73,7 +74,7 @@ class Version {
   // return OK.  Else return a non-OK status.  Fills *stats.
   // REQUIRES: lock is not held
   Status Get(const ReadOptions&, const LookupKey& key, std::string* val,
-             GetStats* stats);
+             GetStats* stats, threadpool thpool = nullptr);
 
   Status GetWithReminder(const ReadOptions& options, const LookupKey& k, 
             std::string* value, const Slice& reminder_result);
@@ -114,10 +115,30 @@ class Version {
 
   int NumFiles(int level) const { return files_[level].size(); }
 
+  void AddFileToQueue(uint64_t file, uint64_t file_size,
+               const InternalKey& smallest, const InternalKey& largest);
+
+  static void *read_thread(void *arg);
+
   // Return a human readable string that describes this version's contents.
   std::string DebugString() const;
 
  private:
+  typedef struct read_struct {
+    int val;
+    void* arg;
+    void (*ReadFromCache)(void*, int);
+    bool (*ReadUseIO)(void*, int, FileMetaData*);
+    Slice user_key;
+    Slice internal_key;  
+    const Comparator* ucmp;  
+    Version* version;
+    FileMetaData** need_search;
+  }read_struct;
+
+  std::mutex interState_files_mutex_;
+  std::queue<FileMetaData*> interState_files_; //L0-L1computation output file that has been downloaded but not yet applied
+
   friend class Compaction;
   friend class VersionSet;
 
@@ -146,7 +167,15 @@ class Version {
   //
   // REQUIRES: user portion of internal_key == user_key.
   void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
-                          bool (*func)(void*, int, FileMetaData*));
+                          void (*ReadFromCache)(void*, int), 
+                          bool (*ReadUseIO)(void*, int, FileMetaData*),
+                          threadpool thpool);
+
+  void ThreadA_ReadUseIO(Slice user_key, Slice internal_key, void* arg, 
+                        bool (*ReadUseIO)(void*, int, FileMetaData*),
+                        const Comparator* ucmp);
+  
+  void ThreadB_ReadFromCache(void* arg, void (*ReadFromCache)(void*, int));
 
   VersionSet* vset_;  // VersionSet to which this Version belongs
   Version* next_;     // Next version in linked list

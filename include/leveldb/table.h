@@ -65,12 +65,15 @@ class LEVELDB_EXPORT Table {
 
   static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
+  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, void* saver, const int& level, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+
   explicit Table(Rep* rep) : rep_(rep) {}
 
   // Calls (*handle_result)(arg, ...) with the entry found after a call
   // to Seek(key).  May not make such a call if filter policy says
   // that key is not present.
   Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
+                     const int& level,
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
 

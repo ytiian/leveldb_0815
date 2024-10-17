@@ -23,6 +23,7 @@
 
 #include "leveldb/export.h"
 #include "leveldb/slice.h"
+#include "leveldb/comparator.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -34,9 +35,13 @@ namespace leveldb {
 
 class LEVELDB_EXPORT Cache;
 
+//class LEVELDB_EXPORT SkipListBase;
+
 // Create a new cache with a fixed size capacity.  This implementation
 // of Cache uses a least-recently-used eviction policy.
 LEVELDB_EXPORT Cache* NewLRUCache(uint64_t capacity, bool is_monitor = false);
+
+LEVELDB_EXPORT Cache* NewDualCache(uint64_t capacity, const Comparator* internal_cmp, bool is_monitor);
 
 class LEVELDB_EXPORT Cache {
  public:
@@ -89,6 +94,8 @@ class LEVELDB_EXPORT Cache {
   // REQUIRES: handle must not have been released yet.
   // REQUIRES: handle must have been returned by a method on *this.
   virtual void Release(Handle* handle) = 0;
+
+  virtual void AddRef(Handle* handle) {}
 
   // Return the value encapsulated in a handle returned by a
   // successful Lookup().
