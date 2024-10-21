@@ -26,7 +26,7 @@ class Block {
   ~Block();
 
   size_t size() const { return size_; }
-  Iterator* NewIterator(const Comparator* comparator,  const uint64_t& file_number = 0);
+  Iterator* NewIterator(const Comparator* comparator,  const uint64_t& file_number = 0, const bool& which = false);
 
  private:
   class Iter;

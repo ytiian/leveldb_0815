@@ -210,14 +210,15 @@ class Version::LevelFileNumIterator : public Iterator {
 };
 
 static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
-                                 const Slice& file_value, const uint64_t& Placeholder = 0, const CallerType& caller = CallerType::kCallerTypeUnknown) {
+                                 const Slice& file_value, const uint64_t& file_number = 0, const bool& which = false, 
+                                 const CallerType& caller = CallerType::kCallerTypeUnknown) {
   TableCache* cache = reinterpret_cast<TableCache*>(arg);
   if (file_value.size() != 16) {
     return NewErrorIterator(
         Status::Corruption("FileReader invoked with unexpected value"));
   } else {
     return cache->NewIterator(options, DecodeFixed64(file_value.data()),
-                              DecodeFixed64(file_value.data() + 8));
+                              DecodeFixed64(file_value.data() + 8), nullptr, which, caller);
   }
 }
 
@@ -1396,13 +1397,13 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
         const std::vector<FileMetaData*>& files = c->inputs_[which];
         for (size_t i = 0; i < files.size(); i++) {
           list[num++] = table_cache_->NewIterator(options, files[i]->number,
-                                                  files[i]->file_size);
+                                                  files[i]->file_size, nullptr, which, CallerType::kCompaction);
         }
       } else {
         // Create concatenating iterator for the files from this level
         list[num++] = NewTwoLevelIterator(
             new Version::LevelFileNumIterator(icmp_, &c->inputs_[which]),
-            &GetFileIterator, table_cache_, options);
+            &GetFileIterator, table_cache_, options, 0, which, CallerType::kCompaction);
       }
     }
   }

@@ -50,6 +50,16 @@ class IteratorWrapper {
     return file_number_;
   }
 
+  bool IfCache(){
+    assert(Valid());
+    return if_cache_;
+  }
+
+  bool which(){
+    assert(Valid());
+    return iter_->which();
+  }
+
   // Methods below require iter() != nullptr
   Status status() const {
     assert(iter_);
@@ -87,6 +97,8 @@ class IteratorWrapper {
     if (valid_) {
       key_ = iter_->key();
       file_number_ = iter_->FileNumber();
+      if_cache_ = iter_->IfCache();
+      which_ = iter_->which();
       //std::cout<<"file_number:"<<file_number_<<std::endl;
     }
   }
@@ -95,6 +107,8 @@ class IteratorWrapper {
   bool valid_;
   Slice key_;
   uint64_t file_number_;
+  bool if_cache_;
+  bool which_;
 };
 
 }  // namespace leveldb

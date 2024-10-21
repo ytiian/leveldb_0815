@@ -153,8 +153,9 @@ static void ReleaseBlock(void* arg, void* h) {
 
 // Convert an index iterator value (i.e., an encoded BlockHandle)
 // into an iterator over the contents of the corresponding block.
+//[for compaction][for scan]
 Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
-                             const Slice& index_value, const uint64_t& file_number, const CallerType& caller_type) {
+                             const Slice& index_value, const uint64_t& file_number, const bool& which, const CallerType& caller_type) {
   Table* table = reinterpret_cast<Table*>(arg);
   Cache* block_cache = table->rep_->options.block_cache;
   Block* block = nullptr;
@@ -199,10 +200,12 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
 
   Iterator* iter;
   if (block != nullptr) {
-    iter = block->NewIterator(table->rep_->options.comparator, file_number);
+    iter = block->NewIterator(table->rep_->options.comparator, file_number, which);
     if (cache_handle == nullptr) {
+      iter->SetIfCache(false);
       iter->RegisterCleanup(&DeleteBlock, block, nullptr);
     } else {
+      iter->SetIfCache(true);
       iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
     }
   } else {
@@ -211,6 +214,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   return iter;
 }
 
+//[for get]
 Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
                              const Slice& index_value, void* sv, const int& level, const CallerType& caller_type) {
   Saver* saver = reinterpret_cast<Saver*>(sv);
@@ -271,10 +275,10 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   return iter;
 }
 
-Iterator* Table::NewIterator(const ReadOptions& options, const uint64_t& file_number) const {
+Iterator* Table::NewIterator(const ReadOptions& options, const uint64_t& file_number, const bool& which, const CallerType& caller_type) const {
   return NewTwoLevelIterator(
-      rep_->index_block->NewIterator(rep_->options.comparator, file_number),
-      &Table::BlockReader, const_cast<Table*>(this), options, file_number);
+      rep_->index_block->NewIterator(rep_->options.comparator, file_number, which),
+      &Table::BlockReader, const_cast<Table*>(this), options, file_number, which, caller_type);
 }
 
 Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg, const int& level,
@@ -319,7 +323,7 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
   Slice input = reminder_result;
   uint64_t number, offset, size;
   GetVarint64(&input, &number);
-  Iterator* block_iter = BlockReader(this, options, input, 0, CallerType::kGet);
+  Iterator* block_iter = BlockReader(this, options, input, 0, false, CallerType::kGet);
   block_iter->Seek(k);
   if (block_iter->Valid()) {
     (*handle_result)(arg, block_iter->key(), block_iter->value());
