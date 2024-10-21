@@ -17,9 +17,18 @@
 namespace leveldb {
 
 struct L0ReminderEntry {
-  Slice key;
-  Slice value;
-  L0ReminderEntry(const Slice& k, const Slice& v) : key(k), value(v) {}
+  uint64_t file_number;
+  size_t key_length;
+  char key_data[1];
+  void Set(const Slice& k, const uint64_t& number) {
+    file_number = number;
+    memcpy(key_data, k.data(), k.size());
+    key_length = k.size();
+  }
+
+  Slice Key() const {
+    return Slice(key_data, key_length);
+  }
 };
 
 
@@ -70,12 +79,19 @@ class L0_Reminder_HashTable {
     return old;
   }
 
-  TableHandle* Remove(const Slice& key, uint32_t hash) {
+  TableHandle* Remove(const Slice& key, const uint64_t& r_number, uint32_t hash) {
     TableHandle** ptr = FindPointer(key, hash);
     TableHandle* result = *ptr;
     if (result != nullptr) {
-      *ptr = result->next_hash;
-      --elems_;
+      Slice v = result -> value();
+      uint64_t file_number;
+      GetVarint64(&v, &file_number); 
+      if(r_number == file_number){
+        *ptr = result->next_hash;
+        --elems_;
+      } else{
+        return nullptr;
+      }
     }
     return result;
   }
@@ -125,24 +141,60 @@ class L0_Reminder_HashTable {
   }
 };
 
-class L0_Reminder{
+static const int kShardBits = 4;
+static const int kShards = 1 << kShardBits;
+
+class L0_Reminder_Wrapper{
 public:
-  L0_Reminder(){};
-  void WriteToReminder(const Slice& ikey, const Slice& value);
+  L0_Reminder_Wrapper(){};
+  void WriteToReminder(const Slice& ikey, const Slice& value, uint32_t hash);
   //void RemoveFromReminder();
   TableHandle* ReadFromReminder(const Slice& user_key); //返回这个key所在的位置
   void Release(TableHandle* handle);
+  void Erase(const Slice& key, const uint64_t& file_number);
 
 private:
   L0_Reminder_HashTable hash_table;
   void Ref(TableHandle* handle);
   void Unref(TableHandle* handle);
+  mutable port::Mutex mutex_;
 };
 
 static inline uint32_t HashSlice(const Slice& s) {
   return Hash(s.data(), s.size(), 0);
 }
 
+class L0_Reminder{
+private:
+  L0_Reminder_Wrapper shard_[kShards];
+  mutable port::Mutex mutex_;
+
+  static inline uint32_t HashSlice(const Slice& s) {
+    return Hash(s.data(), s.size(), 0);
+  }
+
+  static uint32_t Shard(uint32_t hash) { return hash >> (32 - kShardBits); }
+
+public:
+  L0_Reminder(){};
+  void WriteToReminder(const Slice& ikey, const Slice& value){
+    Slice user_key = Slice(ikey.data(), ikey.size() - 8);
+    const uint32_t hash = HashSlice(user_key);
+    shard_[Shard(hash)].WriteToReminder(user_key, value, hash);
+  }
+  //void RemoveFromReminder();
+  TableHandle* ReadFromReminder(const Slice& user_key){
+    const uint32_t hash = HashSlice(user_key);
+    return shard_[Shard(hash)].ReadFromReminder(user_key); //返回这个key所在的位置
+  } //返回这个key所在的位置
+  void Release(TableHandle* handle){
+    shard_[Shard(handle->hash)].Release(handle);
+  }
+  void Erase(const Slice& key, const uint64_t& file_number){
+    const uint32_t hash = HashSlice(key);
+    shard_[Shard(hash)].Erase(key, file_number);
+  }
+};
 
 } // namespace leveldb
 

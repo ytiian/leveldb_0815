@@ -154,7 +154,7 @@ static void ReleaseBlock(void* arg, void* h) {
 // Convert an index iterator value (i.e., an encoded BlockHandle)
 // into an iterator over the contents of the corresponding block.
 Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
-                             const Slice& index_value, const CallerType& caller_type) {
+                             const Slice& index_value, const uint64_t& file_number, const CallerType& caller_type) {
   Table* table = reinterpret_cast<Table*>(arg);
   Cache* block_cache = table->rep_->options.block_cache;
   Block* block = nullptr;
@@ -199,7 +199,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
 
   Iterator* iter;
   if (block != nullptr) {
-    iter = block->NewIterator(table->rep_->options.comparator);
+    iter = block->NewIterator(table->rep_->options.comparator, file_number);
     if (cache_handle == nullptr) {
       iter->RegisterCleanup(&DeleteBlock, block, nullptr);
     } else {
@@ -271,10 +271,10 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   return iter;
 }
 
-Iterator* Table::NewIterator(const ReadOptions& options) const {
+Iterator* Table::NewIterator(const ReadOptions& options, const uint64_t& file_number) const {
   return NewTwoLevelIterator(
-      rep_->index_block->NewIterator(rep_->options.comparator),
-      &Table::BlockReader, const_cast<Table*>(this), options);
+      rep_->index_block->NewIterator(rep_->options.comparator, file_number),
+      &Table::BlockReader, const_cast<Table*>(this), options, file_number);
 }
 
 Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg, const int& level,
@@ -319,7 +319,7 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
   Slice input = reminder_result;
   uint64_t number, offset, size;
   GetVarint64(&input, &number);
-  Iterator* block_iter = BlockReader(this, options, input, CallerType::kGet);
+  Iterator* block_iter = BlockReader(this, options, input, 0, CallerType::kGet);
   block_iter->Seek(k);
   if (block_iter->Valid()) {
     (*handle_result)(arg, block_iter->key(), block_iter->value());

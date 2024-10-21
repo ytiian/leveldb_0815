@@ -392,6 +392,8 @@ class Compaction {
 
   bool IfInInputFiles(const uint64_t file_number);
 
+  Version* Get_version() { return input_version_; }
+
  private:
   friend class Version;
   friend class VersionSet;

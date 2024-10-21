@@ -117,6 +117,11 @@ class MergingIterator : public Iterator {
     return current_->value();
   }
 
+  uint64_t FileNumber() override{
+    assert(Valid());
+    return current_->FileNumber();
+  }
+
   Status status() const override {
     Status status;
     for (int i = 0; i < n_; i++) {

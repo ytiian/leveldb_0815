@@ -210,7 +210,7 @@ class Version::LevelFileNumIterator : public Iterator {
 };
 
 static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
-                                 const Slice& file_value, const CallerType& caller = CallerType::kCallerTypeUnknown) {
+                                 const Slice& file_value, const uint64_t& Placeholder = 0, const CallerType& caller = CallerType::kCallerTypeUnknown) {
   TableCache* cache = reinterpret_cast<TableCache*>(arg);
   if (file_value.size() != 16) {
     return NewErrorIterator(
@@ -413,7 +413,7 @@ Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, 
   saver.user_key = k.user_key();
   saver.value = value;  
   Slice input = reminder_result;
-  uint64_t number, offset, size;
+  uint64_t number;
   GetVarint64(&input, &number); 
   for(uint32_t i = 0; i < files_[0].size(); i++){
     FileMetaData* f = files_[0][i];
@@ -422,6 +422,9 @@ Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, 
       return Status::OK();
     }
   }  
+  bool flag = false;
+  assert(flag);
+  return Status::OK();
 }
 
 Status Version::Get(const ReadOptions& options, const LookupKey& k,

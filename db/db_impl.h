@@ -223,8 +223,8 @@ class DBImpl : public DB {
 
   std::condition_variable cv_;
   std::mutex map_mutex_;
-  std::unordered_map<uint64_t, std::queue<L0ReminderEntry>> reminder_map_; //file to queue
-  std::queue<L0ReminderEntry> now_queue_;
+  std::unordered_map<uint64_t, std::queue<L0ReminderEntry*>> reminder_map_; //file to queue
+  std::queue<L0ReminderEntry*> now_queue_;
 
   std::atomic<bool> stop_thread_;
   std::thread reminder_thread_;
