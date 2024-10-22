@@ -262,9 +262,6 @@ static void SaveValue(void* arg, const Slice& ikey, const Slice& v) {
   }
 }
 
-static bool NewestFirst(FileMetaData* a, FileMetaData* b) {
-  return a->number > b->number;
-}
 
 void Version::AddFileToQueue(uint64_t file, uint64_t file_size,
                const InternalKey& smallest, const InternalKey& largest){
@@ -373,12 +370,37 @@ void* Version::read_thread(void *arg) {
   return NULL;
 }
 
+static bool NewestFirst(FileMetaData* a, FileMetaData* b) {
+  return a->number > b->number;
+}
+
 void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
                                   void (*ReadFromCache)(void*, int),
                                  bool (*ReadUseIO)(void*, int, FileMetaData*),
+                                 bool (*func)(void*, int, FileMetaData*),
                                  threadpool thpool) {
   Saver* s = reinterpret_cast<Saver*>(arg);
   const Comparator* ucmp = vset_->icmp_.user_comparator();
+
+  std::vector<FileMetaData*> tmp;
+  tmp.reserve(files_[0].size());
+  for (uint32_t i = 0; i < files_[0].size(); i++) {
+    FileMetaData* f = files_[0][i];
+    if (ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
+        ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
+      tmp.push_back(f);
+    }
+  }
+  if (!tmp.empty()) {
+    std::sort(tmp.begin(), tmp.end(), NewestFirst);
+    for (uint32_t i = 0; i < tmp.size(); i++) {
+      if (!(*func)(arg, 0, tmp[i])) {
+        return;
+      }
+    }
+  }  
+
+
   stop = false;
 
   for (int level = 1; level < config::kNumLevels; level++) {
@@ -500,6 +522,46 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
       // "control reaches end of non-void function".
       return false;
     }
+
+    static bool MatchForL0(void* arg, int level, FileMetaData* f) {
+      State* state = reinterpret_cast<State*>(arg);
+
+      if (state->stats->seek_file == nullptr &&
+          state->last_file_read != nullptr) {
+        // We have had more than one seek for this read.  Charge the 1st file.
+        state->stats->seek_file = state->last_file_read;
+        state->stats->seek_file_level = state->last_file_read_level;
+      }
+
+      state->last_file_read = f;
+      state->last_file_read_level = level;
+
+      state->s = state->vset->table_cache_->Get(*state->options, f->number,
+                                                f->file_size, state->ikey,
+                                                &state->saver, SaveValue);
+      if (!state->s.ok()) {
+        state->found = true;
+        return false;
+      }
+      switch (state->saver.state) {
+        case kNotFound:
+          return true;  // Keep searching in other files
+        case kFound:
+          state->found = true;
+          return false;
+        case kDeleted:
+          return false;
+        case kCorrupt:
+          state->s =
+              Status::Corruption("corrupted key for ", state->saver.user_key);
+          state->found = true;
+          return false;
+      }
+
+      // Not reached. Added to avoid false compilation warnings of
+      // "control reaches end of non-void function".
+      return false;
+    }
   };
 
   State state;
@@ -517,7 +579,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
   state.saver.user_key = k.user_key();
   state.saver.value = value;
 
-  ForEachOverlapping(state.saver.user_key, state.ikey, &state, &State::ReadFromCache, &State::Match, thpool);
+  ForEachOverlapping(state.saver.user_key, state.ikey, &state, &State::ReadFromCache, &State::Match, &State::MatchForL0, thpool);
 
   return state.found ? state.s : Status::NotFound(Slice());
 }

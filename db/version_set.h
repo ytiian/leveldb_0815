@@ -169,6 +169,7 @@ class Version {
   void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
                           void (*ReadFromCache)(void*, int), 
                           bool (*ReadUseIO)(void*, int, FileMetaData*),
+                          bool (*func)(void*, int, FileMetaData*),
                           threadpool thpool);
 
   void ThreadA_ReadUseIO(Slice user_key, Slice internal_key, void* arg, 

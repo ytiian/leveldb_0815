@@ -68,6 +68,8 @@ class LEVELDB_EXPORT Table {
 
   static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, void* saver, const int& level, const uint64_t& file_number, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
+  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+
   explicit Table(Rep* rep) : rep_(rep) {}
 
   // Calls (*handle_result)(arg, ...) with the entry found after a call
@@ -84,6 +86,10 @@ class LEVELDB_EXPORT Table {
                      const uint64_t& file_number,
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
+
+  Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
+                    void (*handle_result)(void* arg, const Slice& k,
+                                          const Slice& v));
 
   void ReadMeta(const Footer& footer);
   void ReadFilter(const Slice& filter_handle_value);
