@@ -350,7 +350,7 @@ void Version::ThreadB_ReadFromCache(void* arg, void (*ReadFromCache)(void*, int)
       continue;
     }
     
-    s->cache_handle = nullptr;
+    s->cache_handle[level] = nullptr;
     while(s->status[level].load(std::memory_order_seq_cst) == SEARCH_INIT){
       if(stop){
         return;
@@ -1134,6 +1134,9 @@ Status VersionSet::RecoverL0Reminder(L0_Reminder* l0_reminder){
   Iterator* l0file_iter;
   for(int i = 0; i < size; i++){
     std::cout<<"recover: "<<files[i]->number<<std::endl;
+    //ReadOptions options;
+    //options.fill_cache = false;
+    //l0file_iter = table_cache_->NewIterator(options, files[i]->number, files[i]->file_size);
     l0file_iter = table_cache_->NewIterator(ReadOptions(), files[i]->number, files[i]->file_size);
     TwoLevelIterator* two_level_iter = static_cast<TwoLevelIterator*>(l0file_iter);
     two_level_iter->SeekToFirst();

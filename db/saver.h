@@ -20,8 +20,9 @@ struct Saver {
   const Comparator* ucmp;
   Slice user_key;
   std::string* value;
-  Cache::Handle* cache_handle;
+  Cache::Handle* cache_handle[config::kNumLevels];
   std::atomic<int> status[config::kNumLevels];
+  
 };
 } // namespace
 

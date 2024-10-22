@@ -66,7 +66,7 @@ class LEVELDB_EXPORT Table {
 
   static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const uint64_t& file_number, const bool& which, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
-  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, void* saver, const int& level, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, void* saver, const int& level, const uint64_t& file_number, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
   explicit Table(Rep* rep) : rep_(rep) {}
 
@@ -75,11 +75,13 @@ class LEVELDB_EXPORT Table {
   // that key is not present.
   Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
                      const int& level,
+                     const uint64_t& file_number,
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
 
   Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
                      const Slice& reminder_result,
+                     const uint64_t& file_number,
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
 

@@ -16,12 +16,6 @@
 
 namespace leveldb {
 
-static void ReleaseBlock(void* arg, void* h) {
-  Cache* cache = reinterpret_cast<Cache*>(arg);
-  Cache::Handle* handle = reinterpret_cast<Cache::Handle*>(h);
-  cache->Release(handle);
-}
-
 void ReadBlockFromCache(int level, const Slice& k, void* arg, Cache* block_cache,
                        void (*handle_result)(void*, const Slice&,
                                              const Slice&)){
@@ -42,10 +36,7 @@ void ReadBlockFromCache(int level, const Slice& k, void* arg, Cache* block_cache
     Slice key(cache_key_buffer, sizeof(cache_key_buffer));
     cache_handle = block_cache->Lookup(key, true); // return LRUHandle*
     if (cache_handle != nullptr) {
-      saver->cache_handle = cache_handle;
-      //std::cout<<"Lookup1"<<std::endl;
-      //block_cache -> IncrementCacheHits(CallerType::kGet);
-      //block = reinterpret_cast<Block*>(block_cache->Value(cache_handle)); //Value(cache_handle) : return reinterpret_cast<LRUHandle*>(handle)->value; (void*)
+      saver->cache_handle[level] = cache_handle;
       saver->status[level].store(SEARCH_FOUND_BLOCK, std::memory_order_seq_cst);
     } else{
       saver->status[level].store(SEARCH_NEED_IO, std::memory_order_seq_cst);

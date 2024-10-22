@@ -124,6 +124,11 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
+  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  if (estimated_block_size >= r->options.block_size) {
+    Flush();
+  }
+
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
     //changes *start to a short string in [start,limit).
@@ -145,44 +150,7 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     r->keys_.push(key.ToString());
   }
 
-  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
-  if (estimated_block_size >= r->options.block_size) {
-    Flush();
-  }
 }
-
-/*uint64_t TableBuilder::AddAndUpdateReminder(const Slice& key, const Slice& value, L0_Reminder* l0_reminder) {
-  Rep* r = rep_;
-  assert(!r->closed);
-  if (r->num_entries > 0) {
-    assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
-  }
-
-  if (r->pending_index_entry) {
-    assert(r->data_block.empty());
-    r->options.comparator->FindShortestSeparator(&r->last_key, key);
-    std::string handle_encoding;
-    r->pending_handle.EncodeTo(&handle_encoding);
-    r->index_block.Add(r->last_key, Slice(handle_encoding));
-    r->pending_index_entry = false;
-  }
-
-  if (r->filter_block != nullptr) {
-    r->filter_block->AddKey(key);
-  }
-
-  r->last_key.assign(key.data(), key.size());
-  r->num_entries++;
-  r->data_block.Add(key, value);
-
-  uint64_t location = r->offset;
-
-  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
-  if (estimated_block_size >= r->options.block_size) {
-    Flush();
-  }
-  return location;
-}*/
 
 void TableBuilder::Flush() {
   Rep* r = rep_;
@@ -213,6 +181,7 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
   assert(ok());
   Rep* r = rep_;
   Slice raw = block->Finish();
+  // /std::cout<<r->is_compaction_output_<<" "<<is_data_block<<" "<<r->from_cache_<<std::endl;
   if(r->is_compaction_output_ && is_data_block && r->from_cache_){
     //std::cout<<"Insert compaction output block to cache"<<std::endl;
     char* buf = new char[raw.size()];
@@ -226,13 +195,24 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
     Cache* block_cache = r->options.block_cache;
     Cache::Handle* cache_handle = nullptr;
     //...minkey\maxkey
-    Slice max_key(block->LargestKey());
-    Slice min_key(block->SmallestKey());
+
+    const std::string& min = block->SmallestKey();
+    const std::string& max = block->LargestKey();
+    Slice min_key(min);
+    Slice max_key(max);
+
+    //std::cout<<"min_key: "<<min_key.ToString()<<" max_key: "<<max_key.ToString()<<std::endl;
     char cache_key_buffer[sizeof(uint32_t) + max_key.size()];
     EncodeFixed32(cache_key_buffer, r->level_);
     memcpy(cache_key_buffer + sizeof(uint32_t), max_key.data(), max_key.size());
     Slice cache_key(cache_key_buffer, sizeof(cache_key_buffer));
-    //cache_handle = block_cache->Insert(cache_key, block_ptr, block_ptr->size(), &DeleteCachedBlock, min_key, r->file_number_);
+
+    char key_buffer[16];
+    EncodeFixed64(key_buffer, r->file_number_);
+    EncodeFixed64(key_buffer + 8, r->offset);
+    Slice key(key_buffer, sizeof(key_buffer));
+
+    cache_handle = block_cache->Insert(key, block_ptr, block_ptr->size(), &DeleteCachedBlock, true, cache_key, min_key, r->file_number_);
     if(cache_handle != nullptr){
       block_cache->Release(cache_handle);
     }

@@ -82,7 +82,9 @@ class LEVELDB_EXPORT Cache {
 
   virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
                          void (*deleter)(const Slice& key, void* value), 
-                         const bool& dual_insert = false, const Slice& min_key = Slice(), const uint64_t& file_number = 0) = 0;
+                         const bool& dual_insert = false,
+                         const Slice& skiplist_key = Slice(),
+                         const Slice& min_key = Slice(), const uint64_t& file_number = 0) = 0;
   // If the cache has no mapping for "key", returns nullptr.
   //
   // Else return a handle that corresponds to the mapping.  The caller
@@ -107,6 +109,8 @@ class LEVELDB_EXPORT Cache {
   // underlying entry will be kept around until all existing handles
   // to it have been released.
   virtual void Erase(const Slice& key) = 0;
+
+  virtual void Erase(Handle* handle, const bool& clean_all) {};
 
   // Return a new numeric id.  May be used by multiple clients who are
   // sharing the same cache to partition the key space.  Typically the
@@ -146,9 +150,9 @@ class LEVELDB_EXPORT Cache {
 
  private:
   bool is_monitor_;
-  std::atomic<uint64_t> cache_hits_;
-  std::atomic<uint64_t> cache_misses_;
-  std::atomic<uint64_t> cache_insert_;
+  std::atomic<uint64_t> cache_hits_ = 0;
+  std::atomic<uint64_t> cache_misses_ = 0;
+  std::atomic<uint64_t> cache_insert_ = 0;
   std::thread hit_rate_thread_;
   std::mutex mtx_;
   std::condition_variable cv_;

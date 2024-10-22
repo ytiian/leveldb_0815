@@ -842,11 +842,12 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
     mutex_.Unlock();
   }
 
+  int level = compact->compaction->level()+1;
   // Make the output file
   std::string fname = TableFileName(dbname_, file_number);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
   if (s.ok()) {
-    compact->builder = new TableBuilder(options_, compact->outfile);
+    compact->builder = new TableBuilder(options_, compact->outfile, level, true, file_number);
   }
   return s;
 }

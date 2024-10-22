@@ -75,6 +75,7 @@ void BlockBuilder::Add(const Slice& key, const Slice& value) {
   if(smallest_key_.empty()){
     smallest_key_ = key.ToString();
   }
+  //std::cout<<smallest_key_<<" "<<key.ToString()<<std::endl;
   largest_key_ = key.ToString();
   Slice last_key_piece(last_key_);
   

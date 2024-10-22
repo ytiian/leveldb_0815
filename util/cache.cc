@@ -358,7 +358,9 @@ class ShardedLRUCache : public Cache {
   ~ShardedLRUCache() override {}
   Handle* Insert(const Slice& key, void* value, uint64_t charge,
                  void (*deleter)(const Slice& key, void* value),
-                 const bool& dual_insert, const Slice& min_key, const uint64_t& file_number) override {
+                 const bool& dual_insert,
+                 const Slice& skiplist_key,
+                 const Slice& min_key, const uint64_t& file_number) override {
     const uint32_t hash = HashSlice(key);
     return shard_[Shard(hash)].Insert(key, hash, value, charge, deleter);
   }

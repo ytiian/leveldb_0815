@@ -225,6 +225,11 @@ class SkipListBase { //Skiplist
       Slice cache_key = x->GetKV()->key();
       int cache_level = DecodeFixed32(cache_key.data());
 
+      /*std::cout << "target level vs find level:"<<cache_level<<","<<key_level<<std::endl;
+      std::cout<<"target key:"<<key_target.ToString()<<std::endl;
+      std::cout<<"min_key:"<<x->GetKV()->MinKey().ToString()<<std::endl;
+      std::cout<<"max_key:"<<x->GetKV()->MaxKey().ToString()<<std::endl;
+      std::cout<<"******************************"<<std::endl<<std::endl;*/
       if(cache_level == key_level 
               && compare_.UserCompare(key_target, x->GetKV()->MaxKey()) <= 0 
               && compare_.UserCompare(key_target, x->GetKV()->MinKey()) >= 0){
@@ -376,7 +381,8 @@ class LRUCache {
   Cache::Handle* Insert(const Slice& key, uint32_t hash, void* value,
                         uint64_t charge,
                         void (*deleter)(const Slice& key, void* value), const bool& dual_insert,
-                         const Slice& min_key, const uint64_t& file_number);
+                        const Slice& sl_key,
+                        const Slice& min_key, const uint64_t& file_number);
   Cache::Handle* Lookup(const Slice& key, uint32_t hash);
   void Release(Cache::Handle* handle);
   void AddRef(Cache::Handle* handle);
@@ -430,8 +436,12 @@ LRUCache::~LRUCache() {
     LRUHandle* next = e->next;
     assert(e->in_cache);
     e->in_cache = false;
-    assert(e->refs == 1);  // Invariant of lru_ list.
+    assert((!e->in_skiplist && e->refs == 1) || (e->in_skiplist && e->refs == 2) );  // Invariant of lru_ list.
     Unref(e);
+    if(e->in_skiplist){
+      e->in_skiplist = false;
+      Unref(e);
+    }
     e = next;
   }
 }
@@ -504,7 +514,9 @@ Cache::Handle* LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
                                 uint64_t charge,
                                 void (*deleter)(const Slice& key,
                                                 void* value),
-                                const bool& dual_insert, const Slice& min_key, const uint64_t& file_number) {
+                                const bool& dual_insert, 
+                                const Slice& sl_key,
+                                const Slice& min_key, const uint64_t& file_number) {
   MutexLock l(&mutex_);
 
   LRUHandle* e =
@@ -515,22 +527,24 @@ Cache::Handle* LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
   e->key_length = key.size();
   e->hash = hash;
   e->in_cache = false;
+  e->in_skiplist = false;
   e->refs = 1;  // for the returned handle.
   e->next = nullptr;
   std::memcpy(e->key_data, key.data(), key.size());
 
   if(dual_insert){
     KvWrapper* kv = 
-          reinterpret_cast<KvWrapper*>(malloc(sizeof(KvWrapper) - 1 + key.size() + min_key.size()));
+          reinterpret_cast<KvWrapper*>(malloc(sizeof(KvWrapper) - 1 + sl_key.size() + min_key.size()));
     kv->value = value;
-    kv->cache_key_length = key.size();
-    kv->key_data_length = key.size() + min_key.size();
+    kv->cache_key_length = sl_key.size();
+    kv->key_data_length = sl_key.size() + min_key.size();
     kv->if_level0 = min_key.size() == 0 ? 1 : 0; //min_key.size()=0 -> if_level0 = true
     kv->file_number = file_number;  
-    std::memcpy(kv->data, key.data(), key.size());
+    std::memcpy(kv->data, sl_key.data(), sl_key.size());
     if(min_key.size() > 0){
-      std::memcpy(kv->data + key.size(), min_key.data(), min_key.size());
+      std::memcpy(kv->data + sl_key.size(), min_key.data(), min_key.size());
     }
+    e->kv = kv;
   }
 
   if (capacity_ > 0) {
@@ -541,7 +555,6 @@ Cache::Handle* LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
       LRU_Append(&in_use_, e);
       usage_ += charge;
       if(dual_insert){
-        e->in_skiplist = true;
         bool skipkist_insert = skiplist_table_->Insert(e);
         assert(skipkist_insert);
         if(skipkist_insert){
@@ -556,9 +569,12 @@ Cache::Handle* LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
   }
   while (usage_ > capacity_ && lru_.next != &lru_) {
     LRUHandle* old = lru_.next;
-    assert(old->refs == 1);
+    assert((!old->in_skiplist && old->refs == 1) || (old->in_skiplist && old->refs == 2));
     if(old->in_skiplist){
-      FinishErase(skiplist_table_->Remove(old));
+      LRUHandle* result = skiplist_table_->Remove(old);
+      result->in_skiplist = false;
+      assert(result != nullptr);
+      Unref(result);
     }
     bool erased = FinishErase(table_.Remove(old->key(), old->hash));
     if (!erased) {  // to avoid unused variable when compiled NDEBUG
@@ -584,7 +600,15 @@ bool LRUCache::FinishErase(LRUHandle* e) {
 
 void LRUCache::Erase(const Slice& key, uint32_t hash) {
   MutexLock l(&mutex_);
-  FinishErase(table_.Remove(key, hash));
+  LRUHandle* e = table_.Remove(key, hash);
+  if(e != nullptr && e -> in_skiplist){
+    LRUHandle* result = skiplist_table_ -> Remove(e);
+    if(result != nullptr){
+      e->in_skiplist = false;
+      Unref(e);
+    }
+  }  
+  FinishErase(e);
 }
 
 void LRUCache::Prune() {
@@ -629,9 +653,9 @@ class ShardedDualCache : public Cache {
   ~ShardedDualCache() override {}
   Handle* Insert(const Slice& key, void* value, uint64_t charge,
                  void (*deleter)(const Slice& key, void* value), 
-                 const bool& dual_insert, const Slice& min_key, const uint64_t& file_number) override {
+                 const bool& dual_insert, const Slice& skiplist_key, const Slice& min_key, const uint64_t& file_number) override {
     const uint32_t hash = HashSlice(key);
-    return shard_[Shard(hash)].Insert(key, hash, value, charge, deleter, dual_insert, min_key, file_number);
+    return shard_[Shard(hash)].Insert(key, hash, value, charge, deleter, dual_insert, skiplist_key, min_key, file_number);
   }
   Handle* Lookup(const Slice& key, const bool& is_skiplist) override {
     if(is_skiplist){
@@ -659,6 +683,21 @@ class ShardedDualCache : public Cache {
     const uint32_t hash = HashSlice(key);
     shard_[Shard(hash)].Erase(key, hash);
   }
+  void Erase(Handle* handle, const bool& clean_all) override {
+    LRUHandle* h = reinterpret_cast<LRUHandle*>(handle);
+    if(h->in_skiplist){
+      LRUHandle* result = skiplist_table_.Remove(h);
+      if(result != nullptr){
+        result->in_skiplist = false;
+        Cache::Handle* r = reinterpret_cast<Cache::Handle*>(result);
+        Release(r);
+      }
+    }
+    if(clean_all){
+      shard_[Shard(h->hash)].Erase(h->key(), h->hash);
+    }
+  }
+
   void* Value(Handle* handle) override {
     return reinterpret_cast<LRUHandle*>(handle)->value;
   }
