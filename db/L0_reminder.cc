@@ -1,4 +1,5 @@
 #include "db/L0_reminder.h"
+#include "db/dbformat.h"
 #include "util/hash.h"
 #include "leveldb/slice.h"
 #include "util/mutexlock.h"
@@ -15,7 +16,7 @@ TableHandle* L0_Reminder_Wrapper::ReadFromReminder(const Slice& user_key){
   return nullptr;
 }
 
-void L0_Reminder_Wrapper::WriteToReminder(const Slice& user_key, const Slice& value, uint32_t hash){ 
+void L0_Reminder_Wrapper::WriteToReminder(const Slice& user_key, const Slice& value, uint32_t hash, const SequenceNumber& seq){ 
   MutexLock l(&mutex_);
   TableHandle* handle =
       reinterpret_cast<TableHandle*>(malloc(sizeof(TableHandle) - 1 + user_key.size() + value.size()));  
@@ -24,6 +25,7 @@ void L0_Reminder_Wrapper::WriteToReminder(const Slice& user_key, const Slice& va
   handle->charge = handle->key_length + handle->value_length;
   handle->hash = hash;
   handle->refs = 1; //Also counted as one reference in Reminder
+  handle->seq = seq;
   memcpy(handle->key_data, user_key.data(), user_key.size());
   memcpy(handle->key_data + user_key.size(), value.data(), value.size());
   hash_table.Insert(handle);
@@ -47,11 +49,12 @@ void L0_Reminder_Wrapper::Unref(TableHandle* handle){
   }
 }
 
-void L0_Reminder_Wrapper::Erase(const Slice& key, const uint64_t& file_number){
+void L0_Reminder_Wrapper::Erase(const Slice& key, const SequenceNumber& seq){
   MutexLock l(&mutex_);
-  TableHandle* result = hash_table.Remove(key, file_number, HashSlice(key));
+  TableHandle* result = hash_table.Remove(key, seq, HashSlice(key));
   if(result != nullptr){
     Unref(result);
+    //std::cout<<"Erase"<<std::endl;
   } 
 }
 

@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <condition_variable>
 
+#include "db/dbformat.h"
 #include "leveldb/slice.h"
 #include "leveldb/cache.h"
 #include "util/coding.h"
@@ -17,11 +18,11 @@
 namespace leveldb {
 
 struct L0ReminderEntry {
-  uint64_t file_number;
+  SequenceNumber seq_number;
   size_t key_length;
   char key_data[1];
-  void Set(const Slice& k, const uint64_t& number) {
-    file_number = number;
+  void Set(const Slice& k, const uint64_t& seq) {
+    seq_number = seq;
     memcpy(key_data, k.data(), k.size());
     key_length = k.size();
   }
@@ -40,6 +41,7 @@ struct TableHandle {
   uint64_t charge;  
   size_t key_length;
   size_t value_length;
+  SequenceNumber seq;
   bool in_cache;     // Whether entry is in the cache.
   uint32_t refs;     // References, including cache reference, if present.
   uint32_t hash;     // Hash of key(); used for fast sharding and comparisons
@@ -79,14 +81,13 @@ class L0_Reminder_HashTable {
     return old;
   }
 
-  TableHandle* Remove(const Slice& key, const uint64_t& r_number, uint32_t hash) {
+  TableHandle* Remove(const Slice& key, const SequenceNumber& seq, uint32_t hash) {
     TableHandle** ptr = FindPointer(key, hash);
     TableHandle* result = *ptr;
     if (result != nullptr) {
       Slice v = result -> value();
-      uint64_t file_number;
-      GetVarint64(&v, &file_number); 
-      if(r_number == file_number){
+      const SequenceNumber& r_seq = result -> seq; 
+      if(r_seq == seq){
         *ptr = result->next_hash;
         --elems_;
       } else{
@@ -147,7 +148,7 @@ static const int kShards = 1 << kShardBits;
 class L0_Reminder_Wrapper{
 public:
   L0_Reminder_Wrapper(){};
-  void WriteToReminder(const Slice& ikey, const Slice& value, uint32_t hash);
+  void WriteToReminder(const Slice& ikey, const Slice& value, uint32_t hash, const SequenceNumber& seq);
   //void RemoveFromReminder();
   TableHandle* ReadFromReminder(const Slice& user_key); //???????key?????¦Ë??
   void Release(TableHandle* handle);
@@ -177,10 +178,15 @@ private:
 
 public:
   L0_Reminder(){};
-  void WriteToReminder(const Slice& ikey, const Slice& value){
-    Slice user_key = Slice(ikey.data(), ikey.size() - 8);
+  void WriteToReminder(const Slice& key, const Slice& value){
+    ParsedInternalKey ikey;
+    if (!ParseInternalKey(key, &ikey)) {
+      return;
+    }
+    const Slice& user_key = ikey.user_key;
+    const SequenceNumber& seq = ikey.sequence;
     const uint32_t hash = HashSlice(user_key);
-    shard_[Shard(hash)].WriteToReminder(user_key, value, hash);
+    shard_[Shard(hash)].WriteToReminder(user_key, value, hash, seq);
   }
   //void RemoveFromReminder();
   TableHandle* ReadFromReminder(const Slice& user_key){

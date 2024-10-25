@@ -12,6 +12,7 @@
 #include "leveldb/env.h"
 #include "leveldb/iterator.h"
 #include "db/L0_reminder.h"
+#include "leveldb/table_builder.h"
 
 namespace leveldb {
 

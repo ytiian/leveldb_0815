@@ -882,7 +882,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   compact->outfile = nullptr;
 
   //l0 reminder
-  if(compact->compaction->level() == 0){
+  if(compact->compaction->level() == 1){
     {
       std::unique_lock<std::mutex> lock(done_files_mutex_);
       done_files_.push(output_number);
@@ -891,7 +891,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
       now_queue_ = std::queue<L0ReminderEntry*>();
     }
     const CompactionState::Output* out = compact->current_output();
-    compact->compaction->Get_version()->AddFileToQueue(out->number, out->file_size, out->smallest, out->largest);
+    //compact->compaction->Get_version()->AddFileToQueue(out->number, out->file_size, out->smallest, out->largest);
   }
 
   if (s.ok() && current_entries > 0) {
@@ -951,8 +951,8 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   // Release mutex while we're actually doing the compaction work
   mutex_.Unlock();
 
-  bool is_l0_compaction = (compact->compaction->level() == 0);
-  if(is_l0_compaction){
+  bool is_l1_compaction = (compact->compaction->level() == 1);
+  if(is_l1_compaction){
     stop_thread_ = false;
     reminder_thread_ = std::thread(&DBImpl::ReminderRemoveThread, this);  
   }
@@ -1018,16 +1018,17 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         drop = true;
       } 
       
+      SequenceNumber seq = ikey.sequence;
       if(!drop){ //kv may be from level-1
         TableHandle* result = nullptr;
         //result = l0_reminder_->ReadFromReminder(ikey.user_key);
-        if(is_l0_compaction && !input->which()){
+        if(is_l1_compaction && !input->which()){
           //std::cout<<"push:"<<ikey.user_key.ToString()<<std::endl;
-          uint64_t file_number = input -> FileNumber();
+          //uint64_t file_number = input -> FileNumber();
           //std::cout<<"file_number:"<<file_number<<std::endl;
           L0ReminderEntry* entry = 
             reinterpret_cast<L0ReminderEntry*>(malloc(sizeof(L0ReminderEntry) - 1 + ikey.user_key.size()));
-          entry -> Set(ikey.user_key, file_number);
+          entry -> Set(ikey.user_key, seq);
           now_queue_.push(entry);      
         }
       }
@@ -1211,15 +1212,17 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     // First look in the memtable, then in the immutable memtable (if any).
     TableHandle* result = nullptr;
     LookupKey lkey(key, snapshot); //this 'key' is user_key
+    bool need_search = true;
     if (mem->Get(lkey, value, &s)) {
       // Done
     } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
       // Done
     } else if ((result = l0_reminder_->ReadFromReminder(key)) != nullptr){
       Slice reminder_result = result->value();
-      s = current->GetWithReminder(options, lkey, value, reminder_result);  
+      s = current->GetWithReminder(options, lkey, value, reminder_result, &need_search);  
       l0_reminder_->Release(result);
-    } else {
+    } 
+    if(need_search){
       s = current->Get(options, lkey, value, &stats);
       have_stat_update = true;
     }
@@ -1678,7 +1681,7 @@ void DBImpl::ReminderRemoveThread() {
     while (!entries.empty()) {
       L0ReminderEntry* entry = entries.front();
       Slice key = entry->Key();
-      l0_reminder_->Erase(key, entry->file_number);
+      l0_reminder_->Erase(key, entry->seq_number);
       entries.pop();
       free(entry);
     }
@@ -1690,7 +1693,6 @@ void DBImpl::StopReminderRemoveThread() {
     std::unique_lock<std::mutex> lock(done_files_mutex_);
     cv_.wait(lock, [&] { return done_files_.empty(); });
   }
-  // ???????????????????
   stop_thread_ = true;
   cv_.notify_all();
   if (reminder_thread_.joinable()) {

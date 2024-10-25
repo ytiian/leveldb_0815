@@ -18,11 +18,13 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <queue>
 
 #include "db/dbformat.h"
 #include "db/version_edit.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
+#include "db/L0_reminder.h"
 
 namespace leveldb {
 
@@ -76,7 +78,7 @@ class Version {
              GetStats* stats);
 
   Status GetWithReminder(const ReadOptions& options, const LookupKey& k, 
-            std::string* value, const Slice& reminder_result);
+            std::string* value, const Slice& reminder_result, bool* need_search);
 
   // Adds "stats" into the current state.  Returns true if a new
   // compaction may need to be triggered, false otherwise.

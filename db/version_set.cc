@@ -318,7 +318,7 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
 }
 
 Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, std::string* value, 
-        const Slice& reminder_result){
+        const Slice& reminder_result, bool* need_search){
   Saver saver;
   saver.state = kNotFound;
   saver.ucmp = vset_->icmp_.user_comparator();
@@ -331,9 +331,11 @@ Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, 
     FileMetaData* f = files_[0][i];
     if(f->number == number){
       vset_->table_cache_->Get(options, f->number, f->file_size, k.internal_key(), &saver, reminder_result, SaveValue);
+      *need_search = false;
       return Status::OK();
     }
   }  
+  return Status::OK();
 }
 
 Status Version::Get(const ReadOptions& options, const LookupKey& k,
