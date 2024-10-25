@@ -77,12 +77,14 @@ class TwoLevelIterator : public Iterator {
 
 TwoLevelIterator::TwoLevelIterator(Iterator* index_iter,
                                    BlockFunction block_function, void* arg,
-                                   const ReadOptions& options, const uint64_t& file_number)
+                                   const ReadOptions& options, const uint64_t& file_number,
+                                   const bool& which)
     : block_function_(block_function),
       arg_(arg),
       options_(options),
       index_iter_(index_iter),
       data_iter_(nullptr),
+      which_(which),
       file_number_(file_number) {}
 
 TwoLevelIterator::~TwoLevelIterator() = default;
@@ -161,7 +163,7 @@ void TwoLevelIterator::InitDataBlock() {
       // data_iter_ is already constructed with this iterator, so
       // no need to change anything
     } else {
-      Iterator* iter = (*block_function_)(arg_, options_, handle, file_number_, CallerType::kCallerTypeUnknown);
+      Iterator* iter = (*block_function_)(arg_, options_, handle, file_number_, which_, CallerType::kCallerTypeUnknown);
       data_block_handle_.assign(handle.data(), handle.size());
       SetDataIterator(iter);
     }
@@ -172,8 +174,9 @@ void TwoLevelIterator::InitDataBlock() {
 
 Iterator* NewTwoLevelIterator(Iterator* index_iter,
                               BlockFunction block_function, void* arg,
-                              const ReadOptions& options, const uint64_t& file_number) {
-  return new TwoLevelIterator(index_iter, block_function, arg, options, file_number);
+                              const ReadOptions& options, const uint64_t& file_number,
+                              const bool& which) {
+  return new TwoLevelIterator(index_iter, block_function, arg, options, file_number, which);
 }
 
 }  // namespace leveldb

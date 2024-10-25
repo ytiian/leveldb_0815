@@ -17,12 +17,13 @@ namespace leveldb {
 
 struct ReadOptions;
 
-typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const uint64_t&, const CallerType&);
+typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const uint64_t&, const bool&, const CallerType&);
 
 class TwoLevelIterator : public Iterator {
  public:
   TwoLevelIterator(Iterator* index_iter, BlockFunction block_function,
-                   void* arg, const ReadOptions& options, const uint64_t& file_number);
+                   void* arg, const ReadOptions& options, const uint64_t& file_number,
+                   const bool& which);
 
   ~TwoLevelIterator() override;
 
@@ -40,6 +41,10 @@ class TwoLevelIterator : public Iterator {
   uint64_t FileNumber() override { 
     assert(Valid());
     return data_iter_.FileNumber();
+  }
+  bool which() override {
+    assert(Valid());
+    return data_iter_.which();
   }
   Slice value() const override {
     assert(Valid());
@@ -83,6 +88,7 @@ class TwoLevelIterator : public Iterator {
   // "index_value" passed to block_function_ to create the data_iter_.
   std::string data_block_handle_;
   uint64_t file_number_;
+  bool which_;  
 };
 // Return a new two level iterator.  A two-level iterator contains an
 // index iterator whose values point to a sequence of blocks where
@@ -96,8 +102,8 @@ class TwoLevelIterator : public Iterator {
 Iterator* NewTwoLevelIterator(
     Iterator* index_iter,
     Iterator* (*block_function)(void* arg, const ReadOptions& options,
-                                const Slice& index_value, const uint64_t& file_number, const CallerType& caller_type),
-    void* arg, const ReadOptions& options, const uint64_t& file_number = 0);
+                                const Slice& index_value, const uint64_t& file_number, const bool& which, const CallerType& caller_type),
+    void* arg, const ReadOptions& options, const uint64_t& file_number = 0, const bool& which = false);
 
 }  // namespace leveldb
 

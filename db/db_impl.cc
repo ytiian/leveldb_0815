@@ -1017,11 +1017,11 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         // Therefore this deletion marker is obsolete and can be dropped.
         drop = true;
       } 
-
+      
       if(!drop){ //kv may be from level-1
         TableHandle* result = nullptr;
         //result = l0_reminder_->ReadFromReminder(ikey.user_key);
-        if(is_l0_compaction){
+        if(is_l0_compaction && !input->which()){
           //std::cout<<"push:"<<ikey.user_key.ToString()<<std::endl;
           uint64_t file_number = input -> FileNumber();
           //std::cout<<"file_number:"<<file_number<<std::endl;

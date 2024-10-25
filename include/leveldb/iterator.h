@@ -80,7 +80,10 @@ class LEVELDB_EXPORT Iterator {
   virtual uint64_t FileNumber(){
     return 0;
   }
-
+  
+  virtual bool which(){
+    return false;
+  }
   // Clients are allowed to register function/arg1/arg2 triples that
   // will be invoked when this iterator is destroyed.
   //

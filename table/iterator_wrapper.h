@@ -51,6 +51,11 @@ class IteratorWrapper {
     return file_number_;
   }
 
+  bool which(){
+    assert(Valid());
+    return iter_->which();
+  }
+
   Status status() const {
     assert(iter_);
     return iter_->status();
@@ -87,6 +92,7 @@ class IteratorWrapper {
     if (valid_) {
       key_ = iter_->key();
       file_number_ = iter_->FileNumber();
+      which_ = iter_->which();
     }
   }
 
@@ -94,6 +100,7 @@ class IteratorWrapper {
   bool valid_;
   Slice key_;
   uint64_t file_number_;
+  bool which_;
 };
 
 }  // namespace leveldb
