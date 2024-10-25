@@ -288,14 +288,34 @@ void Version::AddFileToQueue(uint64_t file, uint64_t file_size,
   f->file_size = file_size;
   f->smallest = smallest;
   f->largest = largest;
-  interState_files_.push(f);                
+  interState_files_.push_back(f);    
+  std::cout<<"now_queue_size:"<<interState_files_.size()<<std::endl;          
 }
 
 void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg, 
                                  bool (*func)(void*, int, FileMetaData*)) {
   const Comparator* ucmp = vset_->icmp_.user_comparator();
 
+  FileMetaData* f = nullptr;
+  int now_size;
+  {
+      std::unique_lock<std::mutex> lock(interState_files_mutex_);
+      /*if(!interState_files_.empty()){
+          std::cout<<interState_files_.size()<<std::endl;
+      }*/
+      now_size = interState_files_.size();
+  }
 
+  for (int i = 0; i < now_size; ++i){
+    FileMetaData* f = interState_files_[i];
+    if (ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0) { 
+        continue;
+    }
+    if (!(*func)(arg, 1, f)) { // false means stop searching
+        //std::cout<<"found in interState_files_"<<std::endl;                  
+        return;
+    }        
+  }
 
   // Search other levels.
   for (int level = 1; level < config::kNumLevels; level++) {

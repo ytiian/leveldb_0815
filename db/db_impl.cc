@@ -882,7 +882,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   compact->outfile = nullptr;
 
   //l0 reminder
-  if(compact->compaction->level() == 1){
+  if(compact->compaction->level() == 0){
     {
       std::unique_lock<std::mutex> lock(done_files_mutex_);
       done_files_.push(output_number);
@@ -891,7 +891,8 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
       now_queue_ = std::queue<L0ReminderEntry*>();
     }
     const CompactionState::Output* out = compact->current_output();
-    //compact->compaction->Get_version()->AddFileToQueue(out->number, out->file_size, out->smallest, out->largest);
+    compact->compaction->Get_version()->AddFileToQueue(out->number, out->file_size, out->smallest, out->largest);
+    //std::cout<<"Add file to queue: "<<out->number<<std::endl;
   }
 
   if (s.ok() && current_entries > 0) {
@@ -951,8 +952,8 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   // Release mutex while we're actually doing the compaction work
   mutex_.Unlock();
 
-  bool is_l1_compaction = (compact->compaction->level() == 1);
-  if(is_l1_compaction){
+  bool is_l0_compaction = (compact->compaction->level() == 0);
+  if(is_l0_compaction){
     stop_thread_ = false;
     reminder_thread_ = std::thread(&DBImpl::ReminderRemoveThread, this);  
   }
@@ -1022,7 +1023,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       if(!drop){ //kv may be from level-1
         TableHandle* result = nullptr;
         //result = l0_reminder_->ReadFromReminder(ikey.user_key);
-        if(is_l1_compaction && !input->which()){
+        if(is_l0_compaction && !input->which()){
           //std::cout<<"push:"<<ikey.user_key.ToString()<<std::endl;
           //uint64_t file_number = input -> FileNumber();
           //std::cout<<"file_number:"<<file_number<<std::endl;

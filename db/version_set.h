@@ -136,7 +136,7 @@ class Version {
   }read_struct;
 
   std::mutex interState_files_mutex_;
-  std::queue<FileMetaData*> interState_files_; //L0-L1computation output file that has been downloaded but not yet applied
+  std::vector<FileMetaData*> interState_files_; //L0-L1computation output file that has been downloaded but not yet applied
 
   friend class Compaction;
   friend class VersionSet;
