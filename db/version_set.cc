@@ -208,7 +208,7 @@ class Version::LevelFileNumIterator : public Iterator {
 };
 
 static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
-                                 const Slice& file_value, const CallerType& caller = CallerType::kCallerTypeUnknown) {
+                                 const Slice& file_value, const uint64_t& Placeholder = 0, const CallerType& caller = CallerType::kCallerTypeUnknown) {
   TableCache* cache = reinterpret_cast<TableCache*>(arg);
   if (file_value.size() != 16) {
     return NewErrorIterator(
@@ -278,28 +278,22 @@ static bool NewestFirst(FileMetaData* a, FileMetaData* b) {
   return a->number > b->number;
 }
 
-void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
+void Version::AddFileToQueue(uint64_t file, uint64_t file_size,
+               const InternalKey& smallest, const InternalKey& largest){
+  std::unique_lock<std::mutex> lock(interState_files_mutex_);
+  FileMetaData* f = new FileMetaData(); 
+  f->number = file;
+  f->file_size = file_size;
+  f->smallest = smallest;
+  f->largest = largest;
+  interState_files_.push(f);                
+}
+
+void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg, 
                                  bool (*func)(void*, int, FileMetaData*)) {
   const Comparator* ucmp = vset_->icmp_.user_comparator();
 
-  // Search level-0 in order from newest to oldest.
-  std::vector<FileMetaData*> tmp;
-  tmp.reserve(files_[0].size());
-  for (uint32_t i = 0; i < files_[0].size(); i++) {
-    FileMetaData* f = files_[0][i];
-    if (ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
-        ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
-      tmp.push_back(f);
-    }
-  }
-  if (!tmp.empty()) {
-    std::sort(tmp.begin(), tmp.end(), NewestFirst);
-    for (uint32_t i = 0; i < tmp.size(); i++) {
-      if (!(*func)(arg, 0, tmp[i])) {
-        return;
-      }
-    }
-  }
+
 
   // Search other levels.
   for (int level = 1; level < config::kNumLevels; level++) {
@@ -314,8 +308,8 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
         // All of "f" is past any data for user_key
       } else {
         if (!(*func)(arg, level, f)) {
-          return;
-        }
+        return;
+      }
       }
     }
   }
@@ -432,7 +426,7 @@ bool Version::UpdateStats(const GetStats& stats) {
 }
 
 bool Version::RecordReadSample(Slice internal_key) {
-  ParsedInternalKey ikey;
+  /*ParsedInternalKey ikey;
   if (!ParseInternalKey(internal_key, &ikey)) {
     return false;
   }
@@ -467,6 +461,7 @@ bool Version::RecordReadSample(Slice internal_key) {
     return UpdateStats(state.stats);
   }
   return false;
+  */
 }
 
 void Version::Ref() { ++refs_; }

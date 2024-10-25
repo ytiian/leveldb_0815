@@ -89,7 +89,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   }
 
   Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-  Iterator* result = table->NewIterator(options);
+  Iterator* result = table->NewIterator(options, file_number);
   result->RegisterCleanup(&UnrefEntry, cache_, handle);
   if (tableptr != nullptr) {
     *tableptr = table;

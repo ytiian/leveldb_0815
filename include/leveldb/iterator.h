@@ -18,6 +18,7 @@
 #include "leveldb/export.h"
 #include "leveldb/slice.h"
 #include "leveldb/status.h"
+#include <cstdint>
 
 namespace leveldb {
 
@@ -74,6 +75,10 @@ class LEVELDB_EXPORT Iterator {
 
   virtual bool IfCache(){
     return false;
+  }
+
+  virtual uint64_t FileNumber(){
+    return 0;
   }
 
   // Clients are allowed to register function/arg1/arg2 triples that

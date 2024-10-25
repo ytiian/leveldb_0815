@@ -80,6 +80,7 @@ class Block::Iter : public Iterator {
   const char* const data_;       // underlying block contents
   uint32_t const restarts_;      // Offset of restart array (list of fixed32)
   uint32_t const num_restarts_;  // Number of uint32_t entries in restart array
+  uint64_t file_number_;
 
   // current_ is offset in data_ of current entry.  >= restarts_ if !Valid
   uint32_t current_;
@@ -114,13 +115,14 @@ class Block::Iter : public Iterator {
 
  public:
   Iter(const Comparator* comparator, const char* data, uint32_t restarts,
-       uint32_t num_restarts)
+       uint32_t num_restarts, const uint64_t& file_number)
       : comparator_(comparator),
         data_(data),
         restarts_(restarts),
         num_restarts_(num_restarts),
         current_(restarts_),
-        restart_index_(num_restarts_) {
+        restart_index_(num_restarts_),
+        file_number_(file_number) {
     assert(num_restarts_ > 0);
   }
 
@@ -238,6 +240,11 @@ class Block::Iter : public Iterator {
     }
   }
 
+  uint64_t FileNumber() override { 
+    //std::cout<<"file_number:"<<file_number<<std::endl;
+    return file_number_; 
+  }
+
  private:
   void CorruptionError() {
     current_ = restarts_;
@@ -277,7 +284,7 @@ class Block::Iter : public Iterator {
   }
 };
 
-Iterator* Block::NewIterator(const Comparator* comparator) {
+Iterator* Block::NewIterator(const Comparator* comparator, const uint64_t& file_number) {
   if (size_ < sizeof(uint32_t)) {
     return NewErrorIterator(Status::Corruption("bad block contents"));
   }
@@ -285,7 +292,7 @@ Iterator* Block::NewIterator(const Comparator* comparator) {
   if (num_restarts == 0) {
     return NewEmptyIterator();
   } else {
-    return new Iter(comparator, data_, restart_offset_, num_restarts);
+    return new Iter(comparator, data_, restart_offset_, num_restarts, file_number);
   }
 }
 

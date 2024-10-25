@@ -114,10 +114,28 @@ class Version {
 
   int NumFiles(int level) const { return files_[level].size(); }
 
+  void AddFileToQueue(uint64_t file, uint64_t file_size,
+               const InternalKey& smallest, const InternalKey& largest);
+
   // Return a human readable string that describes this version's contents.
   std::string DebugString() const;
 
  private:
+  typedef struct read_struct {
+    int val;
+    void* arg;
+    void (*ReadFromCache)(void*, int);
+    bool (*ReadUseIO)(void*, int, FileMetaData*);
+    Slice user_key;
+    Slice internal_key;  
+    const Comparator* ucmp;  
+    Version* version;
+    FileMetaData** need_search;
+  }read_struct;
+
+  std::mutex interState_files_mutex_;
+  std::queue<FileMetaData*> interState_files_; //L0-L1computation output file that has been downloaded but not yet applied
+
   friend class Compaction;
   friend class VersionSet;
 
@@ -362,6 +380,8 @@ class Compaction {
   void ReleaseInputs();
 
   bool IfInInputFiles(const uint64_t file_number);
+
+  Version* Get_version() { return input_version_; }
 
  private:
   friend class Version;

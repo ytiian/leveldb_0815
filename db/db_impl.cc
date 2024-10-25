@@ -881,6 +881,19 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   delete compact->outfile;
   compact->outfile = nullptr;
 
+  //l0 reminder
+  if(compact->compaction->level() == 0){
+    {
+      std::unique_lock<std::mutex> lock(done_files_mutex_);
+      done_files_.push(output_number);
+      cv_.notify_all();
+      reminder_map_[output_number] = std::move(now_queue_);
+      now_queue_ = std::queue<L0ReminderEntry*>();
+    }
+    const CompactionState::Output* out = compact->current_output();
+    compact->compaction->Get_version()->AddFileToQueue(out->number, out->file_size, out->smallest, out->largest);
+  }
+
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
     Iterator* iter =
@@ -1007,22 +1020,15 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
 
       if(!drop){ //kv may be from level-1
         TableHandle* result = nullptr;
-        result = l0_reminder_->ReadFromReminder(ikey.user_key);
+        //result = l0_reminder_->ReadFromReminder(ikey.user_key);
         if(is_l0_compaction){
-          if(result != nullptr){
-            Slice value = result->value();
-            uint64_t file_number;
-            GetVarint64(&value, &file_number);
-            if(!compact->compaction->IfInInputFiles(file_number)){ //have new kv version
-              drop = true;
-            } else{
-              now_queue_.push(L0ReminderEntry(ikey.user_key, value));
-            }          
-          }
-        }else {
-          if(result != nullptr){
-            drop = true;
-          }
+          //std::cout<<"push:"<<ikey.user_key.ToString()<<std::endl;
+          uint64_t file_number = input -> FileNumber();
+          //std::cout<<"file_number:"<<file_number<<std::endl;
+          L0ReminderEntry* entry = 
+            reinterpret_cast<L0ReminderEntry*>(malloc(sizeof(L0ReminderEntry) - 1 + ikey.user_key.size()));
+          entry -> Set(ikey.user_key, file_number);
+          now_queue_.push(entry);      
         }
       }
 
@@ -1096,6 +1102,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   mutex_.Lock();
   stats_[compact->compaction->level() + 1].Add(stats);
 
+  StopReminderRemoveThread();
   if (status.ok()) {
     status = InstallCompactionResults(compact);
   }
@@ -1110,7 +1117,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   }
   VersionSet::LevelSummaryStorage tmp;
   Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
-  StopReminderRemoveThread();
+  //StopReminderRemoveThread();
   return status;
 }
 
@@ -1409,6 +1416,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // individual write by 1ms to reduce latency variance.  Also,
       // this delay hands over some CPU to the compaction thread in
       // case it is sharing the same core as the writer.
+      //Log(options_.info_log, "Too many L0 files; SlowDown...\n");
       mutex_.Unlock();
       env_->SleepForMicroseconds(1000);
       allow_delay = false;  // Do not delay a single write more than once
@@ -1661,16 +1669,18 @@ void DBImpl::ReminderRemoveThread() {
         cv_.notify_all();
       }
     }
-    std::queue<L0ReminderEntry> entries;
+    std::queue<L0ReminderEntry*> entries;
     {
       std::unique_lock<std::mutex> lock(map_mutex_);
       entries = std::move(reminder_map_[file_number]);
       reminder_map_.erase(file_number);
     }
     while (!entries.empty()) {
-      L0ReminderEntry& entry = entries.front();
-      //[todo]remove from reminder
+      L0ReminderEntry* entry = entries.front();
+      Slice key = entry->Key();
+      l0_reminder_->Erase(key, entry->file_number);
       entries.pop();
+      free(entry);
     }
   }
 }
@@ -1680,7 +1690,7 @@ void DBImpl::StopReminderRemoveThread() {
     std::unique_lock<std::mutex> lock(done_files_mutex_);
     cv_.wait(lock, [&] { return done_files_.empty(); });
   }
-  // 设置停止标志并通知线程退出
+  // ???????????????????
   stop_thread_ = true;
   cv_.notify_all();
   if (reminder_thread_.joinable()) {

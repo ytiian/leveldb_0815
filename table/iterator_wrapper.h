@@ -7,6 +7,7 @@
 
 #include "leveldb/iterator.h"
 #include "leveldb/slice.h"
+#include <iostream>
 
 namespace leveldb {
 
@@ -44,6 +45,12 @@ class IteratorWrapper {
     return iter_->value();
   }
   // Methods below require iter() != nullptr
+
+  uint64_t FileNumber(){
+    assert(Valid());
+    return file_number_;
+  }
+
   Status status() const {
     assert(iter_);
     return iter_->status();
@@ -79,12 +86,14 @@ class IteratorWrapper {
     valid_ = iter_->Valid();
     if (valid_) {
       key_ = iter_->key();
+      file_number_ = iter_->FileNumber();
     }
   }
 
   Iterator* iter_;
   bool valid_;
   Slice key_;
+  uint64_t file_number_;
 };
 
 }  // namespace leveldb
