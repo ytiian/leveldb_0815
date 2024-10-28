@@ -13,6 +13,8 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_TABLE_BUILDER_H_
 #define STORAGE_LEVELDB_INCLUDE_TABLE_BUILDER_H_
 
+#define THRESHOLD_VALUE 0.5
+
 #include <cstdint>
 
 #include "leveldb/export.h"
@@ -67,7 +69,7 @@ class LEVELDB_EXPORT TableBuilder {
   // Finish building the table.  Stops using the file passed to the
   // constructor after this function returns.
   // REQUIRES: Finish(), Abandon() have not been called
-  Status Finish();
+  Status Finish(int* cnt = nullptr);
 
   // Indicate that the contents of this builder should be abandoned.  Stops
   // using the file passed to the constructor after this function returns.
@@ -86,6 +88,10 @@ class LEVELDB_EXPORT TableBuilder {
   bool IfFromCache();
 
   void SetFromCache();
+
+  void AddFromCacheKeyCnt();
+
+  uint64_t InsertBlockCnt() const;
 
  private:
   bool ok() const { return status().ok(); }

@@ -37,6 +37,9 @@ struct TableBuilder::Rep {
         from_cache_(false),
         l0_reminder_(l0_reminder),
         file_number_(file_number),
+        all_key_cnt_(0),
+        from_cache_key_cnt_(0),
+        insert_block_cnt_(0),
         filter_block(opt.filter_policy == nullptr
                          ? nullptr
                          : new FilterBlockBuilder(opt.filter_policy)),
@@ -61,6 +64,9 @@ struct TableBuilder::Rep {
   bool closed;  // Either Finish() or Abandon() has been called.
   FilterBlockBuilder* filter_block;
   std::queue<std::string> keys_;
+  uint64_t all_key_cnt_;
+  uint64_t from_cache_key_cnt_;
+  uint64_t insert_block_cnt_;
 
   // We do not emit the index entry for a block until we have seen the
   // first key for the next data block.  This allows us to use shorter
@@ -98,6 +104,10 @@ bool TableBuilder::IfFromCache(){
 
 void TableBuilder::SetFromCache() {
   rep_-> from_cache_ = true;
+}
+
+void TableBuilder::AddFromCacheKeyCnt(){
+  rep_->from_cache_key_cnt_++;
 }
 
 Status TableBuilder::ChangeOptions(const Options& options) {
@@ -145,6 +155,7 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 
   r->last_key.assign(key.data(), key.size());
   r->num_entries++;
+  r->all_key_cnt_++;
   r->data_block.Add(key, value);
   if(r->l0_reminder_ != nullptr){
     r->keys_.push(key.ToString());
@@ -182,8 +193,12 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
   Rep* r = rep_;
   Slice raw = block->Finish();
   // /std::cout<<r->is_compaction_output_<<" "<<is_data_block<<" "<<r->from_cache_<<std::endl;
-  if(r->is_compaction_output_ && is_data_block && r->from_cache_){
+  //std::cout<<"from_cache_key_cnt: "<<r->from_cache_key_cnt_<<" all_key_cnt: "<<r->all_key_cnt_;
+  double threshold = r->from_cache_key_cnt_ / (double)r->all_key_cnt_;
+  //std::cout<<" threshold: " << threshold <<std::endl;
+  if(r->is_compaction_output_ && is_data_block && threshold >= THRESHOLD_VALUE){
     //std::cout<<"Insert compaction output block to cache"<<std::endl;
+    r->insert_block_cnt_++;
     char* buf = new char[raw.size()];
     memcpy(buf, raw.data(), raw.size());
     Slice block_contents(buf, raw.size());
@@ -212,7 +227,10 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
     EncodeFixed64(key_buffer + 8, r->offset);
     Slice key(key_buffer, sizeof(key_buffer));
 
-    cache_handle = block_cache->Insert(key, block_ptr, block_ptr->size(), &DeleteCachedBlock, true, cache_key, min_key, r->file_number_);
+    //std::cout<<"level: "<<r->level_<<std::endl;
+    if(r->level_ != 1){
+      cache_handle = block_cache->Insert(key, block_ptr, block_ptr->size(), &DeleteCachedBlock, true, cache_key, min_key, r->file_number_);
+    }
     if(cache_handle != nullptr){
       block_cache->Release(cache_handle);
     }
@@ -261,6 +279,8 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
   WriteRawBlock(block_contents, type, handle, is_data_block); 
   r->compressed_output.clear();
   r->from_cache_ = false;
+  r->all_key_cnt_ = 0;
+  r->from_cache_key_cnt_ = 0;
   block->Reset();
 }
 
@@ -297,12 +317,15 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
 
 Status TableBuilder::status() const { return rep_->status; }
 
-Status TableBuilder::Finish() {
+Status TableBuilder::Finish(int* insert_block_cnt) {
   Rep* r = rep_;
   Flush();
   assert(!r->closed);
   r->closed = true;
 
+  if(insert_block_cnt != nullptr){
+    *insert_block_cnt = (*insert_block_cnt) + r->insert_block_cnt_;
+  }
   BlockHandle filter_block_handle, metaindex_block_handle, index_block_handle;
 
   // Write filter block
@@ -363,5 +386,7 @@ void TableBuilder::Abandon() {
 uint64_t TableBuilder::NumEntries() const { return rep_->num_entries; }
 
 uint64_t TableBuilder::FileSize() const { return rep_->offset; }
+
+uint64_t TableBuilder::InsertBlockCnt() const { return rep_->insert_block_cnt_; }
 
 }  // namespace leveldb

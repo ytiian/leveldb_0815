@@ -17,13 +17,15 @@ namespace leveldb {
 
 struct ReadOptions;
 
-typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const uint64_t&, const bool&, const CallerType&);
+typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&, const uint64_t&, 
+                                  const bool&, const int&, const CallerType&);
 
 class TwoLevelIterator : public Iterator {
  public:
   TwoLevelIterator(Iterator* index_iter, BlockFunction block_function,
                    void* arg, const ReadOptions& options, const uint64_t& file_number, 
-                   const bool& which, const CallerType& calle_type);
+                   const bool& which, const int& level,
+                   const CallerType& calle_type);
 
   ~TwoLevelIterator() override;
 
@@ -42,9 +44,21 @@ class TwoLevelIterator : public Iterator {
     assert(Valid());
     return data_iter_.FileNumber();
   }
+  int Level() override { 
+    assert(Valid());
+    return data_iter_.Level();
+  }
   bool IfCache() override {
     assert(Valid());
     return data_iter_.IfCache();
+  }
+  void SetAlreadyCounted(bool already_counted) override {
+    assert(Valid());
+    data_iter_.SetAlreadyCounted(already_counted);
+  }
+  bool AlreadyCounted() override {
+    assert(Valid());
+    return data_iter_.AlreadyCounted();
   }
 
   bool which() override {
@@ -94,6 +108,7 @@ class TwoLevelIterator : public Iterator {
   // "index_value" passed to block_function_ to create the data_iter_.
   std::string data_block_handle_;
   uint64_t file_number_;
+  int level_;
   bool which_;
   CallerType caller_type_;
 };
@@ -110,8 +125,10 @@ Iterator* NewTwoLevelIterator(
     Iterator* index_iter,
     Iterator* (*block_function)(void* arg, const ReadOptions& options,
                                 const Slice& index_value, const uint64_t& file_number, const bool& which, 
+                                const int& level,
                                 const CallerType& caller_type),
     void* arg, const ReadOptions& options, const uint64_t& file_number = 0, const bool& which = false, 
+    const int& level = 0,
     const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
 }  // namespace leveldb

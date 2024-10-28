@@ -135,6 +135,19 @@ class LEVELDB_EXPORT Cache {
     } 
   }
 
+  void IncrementSkiplistHits(CallerType caller){
+    if( is_monitor_ && caller == CallerType::kGet){
+      cache_hits_.fetch_add(1, std::memory_order_relaxed);
+      skiplist_hits_.fetch_add(1, std::memory_order_relaxed);
+    }     
+  }
+
+  void IncrementDualCacheHit(CallerType caller){
+    if( is_monitor_ && caller == CallerType::kGet){
+      dual_hits_.fetch_add(1, std::memory_order_relaxed);
+    } 
+  }
+
   // µÝÔöcache_misses_
   void IncrementCacheMisses(CallerType caller) {
     if( is_monitor_ && caller == CallerType::kGet){
@@ -151,6 +164,8 @@ class LEVELDB_EXPORT Cache {
  private:
   bool is_monitor_;
   std::atomic<uint64_t> cache_hits_ = 0;
+  std::atomic<uint64_t> skiplist_hits_ = 0;
+  std::atomic<uint64_t> dual_hits_ = 0;
   std::atomic<uint64_t> cache_misses_ = 0;
   std::atomic<uint64_t> cache_insert_ = 0;
   std::thread hit_rate_thread_;
@@ -170,6 +185,8 @@ class LEVELDB_EXPORT Cache {
       uint64_t current_hits = cache_hits_.load(std::memory_order_relaxed);
       uint64_t current_misses = cache_misses_.load(std::memory_order_relaxed);
       uint64_t current_insert = cache_insert_.load(std::memory_order_relaxed);
+      uint64_t current_skiplist_hits = skiplist_hits_.load(std::memory_order_relaxed);
+      uint64_t current_dual_hits = dual_hits_.load(std::memory_order_relaxed);
       uint64_t hits = current_hits - previous_hits;
       uint64_t misses = current_misses - previous_misses;
       uint64_t total = hits + misses;
@@ -179,12 +196,17 @@ class LEVELDB_EXPORT Cache {
       std::time_t nowTime = std::time(nullptr);
 
       std::cout << nowTime << "; Cache Hit Rate (Only Get): " << hit_rate * 100 
-      << "%; total_access: " << current_hits + current_misses 
-      <<"; total_insert: "<< current_insert 
-      << "; total_miss:" << current_misses << std::endl;
+      << "%; access/s: " << total 
+      << "; miss/s:" << misses
+      << "; hit/s:" << hits
+      << "; dual_hit/s" << current_dual_hits
+      << "; skiplist_hits/s: "<< current_skiplist_hits
+       << std::endl;
 
       previous_hits = current_hits;
       previous_misses = current_misses;
+      skiplist_hits_.store(0, std::memory_order_relaxed);
+      dual_hits_.store(0, std::memory_order_relaxed);
     }
   }
 

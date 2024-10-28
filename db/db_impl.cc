@@ -69,7 +69,8 @@ struct DBImpl::CompactionState {
         smallest_snapshot(0),
         outfile(nullptr),
         builder(nullptr),
-        total_bytes(0) {}
+        total_bytes(0),
+        insert_block_cnt(0) {}
 
   Compaction* const compaction;
 
@@ -86,6 +87,7 @@ struct DBImpl::CompactionState {
   TableBuilder* builder;
 
   uint64_t total_bytes;
+  int insert_block_cnt;
 };
 
 // Fix user-supplied options to be reasonable
@@ -861,7 +863,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   Status s = input->status();
   const uint64_t current_entries = compact->builder->NumEntries();
   if (s.ok()) {
-    s = compact->builder->Finish();
+    s = compact->builder->Finish(&compact->insert_block_cnt);
   } else {
     compact->builder->Abandon();
   }
@@ -916,6 +918,7 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
 }
 
 Status DBImpl::DoCompactionWork(CompactionState* compact) {
+  uint64_t erase_block_cnt = 0;
   const uint64_t start_micros = env_->NowMicros();
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
 
@@ -1024,8 +1027,18 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         compact->current_output()->smallest.DecodeFrom(key);
       }
       compact->current_output()->largest.DecodeFrom(key);
-      if(!compact->builder->IfFromCache() && input->IfCache()){
+      /*if(!compact->builder->IfFromCache() && input->IfCache()){
         compact->builder->SetFromCache();
+        compact->insert_block_cnt ++;
+      }*/
+     if(input->IfCache()){
+      compact->builder->AddFromCacheKeyCnt();
+     }
+      if(input->IfCache() && !input->AlreadyCounted() && input->which()){
+        erase_block_cnt ++;
+    //std::cout<<"before set:"<<input->AlreadyCounted()<<std::endl;
+        input->SetAlreadyCounted(true);
+    //std::cout<<"after set:"<<input->AlreadyCounted()<<std::endl;
       }
       compact->builder->Add(key, input->value());
 
@@ -1041,6 +1054,10 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
 
     input->Next();
   }
+
+  Log(options_.compaction_log, "compaction insert block cnt: %d \n", compact->insert_block_cnt);
+  Log(options_.compaction_log, "compaction erase block cnt: %ld \n", erase_block_cnt);
+
 
   if (status.ok() && shutting_down_.load(std::memory_order_acquire)) {
     status = Status::IOError("Deleting DB during compaction");

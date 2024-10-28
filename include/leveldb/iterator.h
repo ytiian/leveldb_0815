@@ -76,14 +76,22 @@ class LEVELDB_EXPORT Iterator {
   virtual bool IfCache(){
     return false;
   }
+  virtual bool AlreadyCounted(){
+    return true;
+  }
   virtual bool which(){
     return false;
   }
   virtual void SetIfCache(bool if_cache){
     return;
   }
-
+  virtual void SetAlreadyCounted(bool already_counted){
+    return;
+  }
   virtual uint64_t FileNumber(){
+    return 0;
+  }
+  virtual int Level(){
     return 0;
   }
 

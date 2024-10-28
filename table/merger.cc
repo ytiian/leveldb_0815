@@ -121,12 +121,25 @@ class MergingIterator : public Iterator {
     assert(Valid());
     return current_->FileNumber();
   }
-
+  int Level() override{
+    assert(Valid());
+    return current_->Level();
+  }
   bool IfCache() override{
     assert(Valid());
     return current_->IfCache();
   }
   
+  bool AlreadyCounted() override{
+    assert(Valid());
+    return current_->AlreadyCounted();
+  }
+  void SetAlreadyCounted(bool ac) override{
+    assert(Valid());
+    current_->SetAlreadyCounted(ac);
+  }
+
+
   bool which() override{
     assert(Valid());
     return current_->which();

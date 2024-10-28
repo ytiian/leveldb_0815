@@ -228,11 +228,11 @@ class SkipListBase { //Skiplist
       /*std::cout << "target level vs find level:"<<cache_level<<","<<key_level<<std::endl;
       std::cout<<"target key:"<<key_target.ToString()<<std::endl;
       std::cout<<"min_key:"<<x->GetKV()->MinKey().ToString()<<std::endl;
-      std::cout<<"max_key:"<<x->GetKV()->MaxKey().ToString()<<std::endl;
-      std::cout<<"******************************"<<std::endl<<std::endl;*/
+      std::cout<<"max_key:"<<x->GetKV()->MaxKey().ToString()<<std::endl;*/
       if(cache_level == key_level 
               && compare_.UserCompare(key_target, x->GetKV()->MaxKey()) <= 0 
               && compare_.UserCompare(key_target, x->GetKV()->MinKey()) >= 0){
+        assert(x->in_cache);
         return x;
       }
       x = nullptr;
@@ -623,7 +623,7 @@ void LRUCache::Prune() {
   }
 }
 
-static const int kNumShardBits = 4;
+static const int kNumShardBits = 6;
 static const int kNumShards = 1 << kNumShardBits;
 
 class ShardedDualCache : public Cache {
@@ -669,7 +669,14 @@ class ShardedDualCache : public Cache {
       return nullptr;
     }
     const uint32_t hash = HashSlice(key);
-    return shard_[Shard(hash)].Lookup(key, hash);
+    Handle* r = shard_[Shard(hash)].Lookup(key, hash);
+    if(r != nullptr){
+      LRUHandle* h = reinterpret_cast<LRUHandle*>(r);
+      if(h->in_skiplist){
+        IncrementDualCacheHit(CallerType::kGet);
+      }
+    }
+    return r;
   }
   void Release(Handle* handle) override {
     LRUHandle* h = reinterpret_cast<LRUHandle*>(handle);

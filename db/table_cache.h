@@ -38,7 +38,8 @@ class TableCache {
   // returned iterator is live.
   Iterator* NewIterator(const ReadOptions& options, uint64_t file_number,
                         uint64_t file_size, Table** tableptr = nullptr, 
-                        bool which = false, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+                        bool which = false, int level = 0,
+                         const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call (*handle_result)(arg, found_key, found_value).
