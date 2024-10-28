@@ -163,7 +163,7 @@ void EraseOnlyOne(void* arg, void* h){
 }
 // Convert an index iterator value (i.e., an encoded BlockHandle)
 // into an iterator over the contents of the corresponding block.
-//[for compaction][for scan][for L0 get]
+//[for compaction][for scan]
 Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
                              const Slice& index_value, const uint64_t& file_number, 
                              const bool& which, const int& level, const CallerType& caller_type) {
@@ -301,7 +301,9 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   return iter;
 }
 
+//[for L0 get]
 Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
+                              const uint64_t& file_number,
                              const Slice& index_value, const CallerType& caller_type) {
   Table* table = reinterpret_cast<Table*>(arg);
   Cache* block_cache = table->rep_->options.block_cache;
@@ -318,7 +320,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
     BlockContents contents;
     if (block_cache != nullptr) {
       char cache_key_buffer[16];
-      EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
+      EncodeFixed64(cache_key_buffer, file_number);
       EncodeFixed64(cache_key_buffer + 8, handle.offset());
       Slice key(cache_key_buffer, sizeof(cache_key_buffer));
       cache_handle = block_cache->Lookup(key);
@@ -366,7 +368,8 @@ Iterator* Table::NewIterator(const ReadOptions& options, const uint64_t& file_nu
       &Table::BlockReader, const_cast<Table*>(this), options, file_number, which, level, caller_type);
 }
 
-Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
+Status Table::InternalGet(const ReadOptions& options, const Slice& k,
+                          const uint64_t& file_number, void* arg,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)) {
   Status s;
@@ -380,7 +383,7 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
     } else {
-      Iterator* block_iter = BlockReader(this, options, iiter->value(), CallerType::kGet);
+      Iterator* block_iter = BlockReader(this, options, file_number, iiter->value(), CallerType::kGet);
       block_iter->Seek(k);
       if (block_iter->Valid()) {
         (*handle_result)(arg, block_iter->key(), block_iter->value());
