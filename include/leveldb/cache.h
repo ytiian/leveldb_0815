@@ -23,6 +23,7 @@
 
 #include "leveldb/export.h"
 #include "leveldb/slice.h"
+#include "leveldb/comparator.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -34,9 +35,13 @@ namespace leveldb {
 
 class LEVELDB_EXPORT Cache;
 
+//class LEVELDB_EXPORT SkipListBase;
+
 // Create a new cache with a fixed size capacity.  This implementation
 // of Cache uses a least-recently-used eviction policy.
 LEVELDB_EXPORT Cache* NewLRUCache(uint64_t capacity, bool is_monitor = false);
+
+LEVELDB_EXPORT Cache* NewDualCache(uint64_t capacity, const Comparator* internal_cmp, bool is_monitor);
 
 class LEVELDB_EXPORT Cache {
  public:
@@ -74,20 +79,25 @@ class LEVELDB_EXPORT Cache {
   //
   // When the inserted entry is no longer needed, the key and
   // value will be passed to "deleter".
-  virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
-                         void (*deleter)(const Slice& key, void* value)) = 0;
 
+  virtual Handle* Insert(const Slice& key, void* value, uint64_t charge,
+                         void (*deleter)(const Slice& key, void* value), 
+                         const bool& dual_insert = false,
+                         const Slice& skiplist_key = Slice(),
+                         const Slice& min_key = Slice(), const uint64_t& file_number = 0) = 0;
   // If the cache has no mapping for "key", returns nullptr.
   //
   // Else return a handle that corresponds to the mapping.  The caller
   // must call this->Release(handle) when the returned mapping is no
   // longer needed.
-  virtual Handle* Lookup(const Slice& key) = 0;
+  virtual Handle* Lookup(const Slice& key, const bool& is_skiplist = false) = 0;
 
   // Release a mapping returned by a previous Lookup().
   // REQUIRES: handle must not have been released yet.
   // REQUIRES: handle must have been returned by a method on *this.
   virtual void Release(Handle* handle) = 0;
+
+  virtual void AddRef(Handle* handle) {}
 
   // Return the value encapsulated in a handle returned by a
   // successful Lookup().
@@ -99,6 +109,8 @@ class LEVELDB_EXPORT Cache {
   // underlying entry will be kept around until all existing handles
   // to it have been released.
   virtual void Erase(const Slice& key) = 0;
+
+  virtual void Erase(Handle* handle, const bool& clean_all) {};
 
   // Return a new numeric id.  May be used by multiple clients who are
   // sharing the same cache to partition the key space.  Typically the
@@ -123,6 +135,19 @@ class LEVELDB_EXPORT Cache {
     } 
   }
 
+  void IncrementSkiplistHits(CallerType caller){
+    if( is_monitor_ && caller == CallerType::kGet){
+      cache_hits_.fetch_add(1, std::memory_order_relaxed);
+      skiplist_hits_.fetch_add(1, std::memory_order_relaxed);
+    }     
+  }
+
+  void IncrementDualCacheHit(CallerType caller){
+    if( is_monitor_ && caller == CallerType::kGet){
+      dual_hits_.fetch_add(1, std::memory_order_relaxed);
+    } 
+  }
+
   // µÝÔöcache_misses_
   void IncrementCacheMisses(CallerType caller) {
     if( is_monitor_ && caller == CallerType::kGet){
@@ -138,9 +163,11 @@ class LEVELDB_EXPORT Cache {
 
  private:
   bool is_monitor_;
-  std::atomic<uint64_t> cache_hits_;
-  std::atomic<uint64_t> cache_misses_;
-  std::atomic<uint64_t> cache_insert_;
+  std::atomic<uint64_t> cache_hits_ = 0;
+  std::atomic<uint64_t> skiplist_hits_ = 0;
+  std::atomic<uint64_t> dual_hits_ = 0;
+  std::atomic<uint64_t> cache_misses_ = 0;
+  std::atomic<uint64_t> cache_insert_ = 0;
   std::thread hit_rate_thread_;
   std::mutex mtx_;
   std::condition_variable cv_;
@@ -158,6 +185,8 @@ class LEVELDB_EXPORT Cache {
       uint64_t current_hits = cache_hits_.load(std::memory_order_relaxed);
       uint64_t current_misses = cache_misses_.load(std::memory_order_relaxed);
       uint64_t current_insert = cache_insert_.load(std::memory_order_relaxed);
+      uint64_t current_skiplist_hits = skiplist_hits_.load(std::memory_order_relaxed);
+      uint64_t current_dual_hits = dual_hits_.load(std::memory_order_relaxed);
       uint64_t hits = current_hits - previous_hits;
       uint64_t misses = current_misses - previous_misses;
       uint64_t total = hits + misses;
@@ -167,12 +196,17 @@ class LEVELDB_EXPORT Cache {
       std::time_t nowTime = std::time(nullptr);
 
       std::cout << nowTime << "; Cache Hit Rate (Only Get): " << hit_rate * 100 
-      << "%; total_access: " << current_hits + current_misses 
-      <<"; total_insert: "<< current_insert 
-      << "; total_miss:" << current_misses << std::endl;
+      << "%; access/s: " << total 
+      << "; miss/s:" << misses
+      << "; hit/s:" << hits
+      << "; dual_hit/s" << current_dual_hits
+      << "; skiplist_hits/s: "<< current_skiplist_hits
+       << std::endl;
 
       previous_hits = current_hits;
       previous_misses = current_misses;
+      skiplist_hits_.store(0, std::memory_order_relaxed);
+      dual_hits_.store(0, std::memory_order_relaxed);
     }
   }
 

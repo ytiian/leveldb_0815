@@ -15,11 +15,14 @@
 #include "table/format.h"
 #include "util/coding.h"
 #include "util/crc32c.h"
+#include "table/block.h"
+#include "leveldb/cache.h"
 
 namespace leveldb {
 
 struct TableBuilder::Rep {
-  Rep(const Options& opt, WritableFile* f)
+  Rep(const Options& opt, WritableFile* f, const uint32_t& level, const bool& is_compaction_output, 
+                            const uint64_t& file_number)
       : options(opt),
         index_block_options(opt),
         file(f),
@@ -28,6 +31,13 @@ struct TableBuilder::Rep {
         index_block(&index_block_options),
         num_entries(0),
         closed(false),
+        level_(level),
+        is_compaction_output_(is_compaction_output),
+        from_cache_(false),
+        file_number_(file_number),
+        all_key_cnt_(0),
+        from_cache_key_cnt_(0),
+        insert_block_cnt_(0),
         filter_block(opt.filter_policy == nullptr
                          ? nullptr
                          : new FilterBlockBuilder(opt.filter_policy)),
@@ -42,10 +52,17 @@ struct TableBuilder::Rep {
   Status status;
   BlockBuilder data_block;
   BlockBuilder index_block;
+  const uint32_t level_;
+  const uint64_t file_number_;
+  const bool is_compaction_output_;
+  bool from_cache_;
   std::string last_key;
   int64_t num_entries;
   bool closed;  // Either Finish() or Abandon() has been called.
   FilterBlockBuilder* filter_block;
+  uint64_t all_key_cnt_;
+  uint64_t from_cache_key_cnt_;
+  uint64_t insert_block_cnt_;
 
   // We do not emit the index entry for a block until we have seen the
   // first key for the next data block.  This allows us to use shorter
@@ -62,8 +79,10 @@ struct TableBuilder::Rep {
   std::string compressed_output;
 };
 
-TableBuilder::TableBuilder(const Options& options, WritableFile* file)
-    : rep_(new Rep(options, file)) {
+TableBuilder::TableBuilder(const Options& options, WritableFile* file, 
+                          const uint32_t& level, const bool& is_compaction_output_,
+                          const uint64_t& file_number)
+    : rep_(new Rep(options, file, level, is_compaction_output_, file_number)) {
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
@@ -73,6 +92,18 @@ TableBuilder::~TableBuilder() {
   assert(rep_->closed);  // Catch errors where caller forgot to call Finish()
   delete rep_->filter_block;
   delete rep_;
+}
+
+bool TableBuilder::IfFromCache(){
+  return rep_-> from_cache_;
+}
+
+void TableBuilder::SetFromCache() {
+  rep_-> from_cache_ = true;
+}
+
+void TableBuilder::AddFromCacheKeyCnt(){
+  rep_->from_cache_key_cnt_++;
 }
 
 Status TableBuilder::ChangeOptions(const Options& options) {
@@ -99,8 +130,14 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
+  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  if (estimated_block_size >= r->options.block_size) {
+    Flush();
+  }
+
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
+    //changes *start to a short string in [start,limit).
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
     std::string handle_encoding;
     r->pending_handle.EncodeTo(&handle_encoding);
@@ -114,12 +151,9 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 
   r->last_key.assign(key.data(), key.size());
   r->num_entries++;
+  r->all_key_cnt_++;
   r->data_block.Add(key, value);
 
-  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
-  if (estimated_block_size >= r->options.block_size) {
-    Flush();
-  }
 }
 
 void TableBuilder::Flush() {
@@ -128,7 +162,7 @@ void TableBuilder::Flush() {
   if (!ok()) return;
   if (r->data_block.empty()) return;
   assert(!r->pending_index_entry);
-  WriteBlock(&r->data_block, &r->pending_handle);
+  WriteBlock(&r->data_block, &r->pending_handle, true);
   if (ok()) {
     r->pending_index_entry = true;
     r->status = r->file->Flush();
@@ -138,7 +172,12 @@ void TableBuilder::Flush() {
   }
 }
 
-void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
+static void DeleteCachedBlock(const Slice& key, void* value) {
+  Block* block = reinterpret_cast<Block*>(value);
+  delete block;
+}
+
+void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bool& is_data_block) {
   // File format contains a sequence of blocks where each block has:
   //    block_data: uint8[n]
   //    type: uint8
@@ -146,6 +185,52 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   assert(ok());
   Rep* r = rep_;
   Slice raw = block->Finish();
+  // /std::cout<<r->is_compaction_output_<<" "<<is_data_block<<" "<<r->from_cache_<<std::endl;
+  //std::cout<<"from_cache_key_cnt: "<<r->from_cache_key_cnt_<<" all_key_cnt: "<<r->all_key_cnt_;
+  /*double threshold = r->from_cache_key_cnt_ / (double)r->all_key_cnt_;
+  //std::cout<<" threshold: " << threshold <<std::endl;
+  if(r->is_compaction_output_ && is_data_block && threshold >= THRESHOLD_VALUE){
+    //std::cout<<"Insert compaction output block to cache"<<std::endl;
+    r->insert_block_cnt_++;
+    char* buf = new char[raw.size()];
+    memcpy(buf, raw.data(), raw.size());
+    Slice block_contents(buf, raw.size());
+    BlockContents contents;
+    contents.data = block_contents;
+    contents.cachable = true;
+    contents.heap_allocated = true;
+    Block* block_ptr = new Block(contents);
+    Cache* block_cache = r->options.block_cache;
+    Cache::Handle* cache_handle = nullptr;
+    //...minkey\maxkey
+
+    const std::string& min = block->SmallestKey();
+    const std::string& max = block->LargestKey();
+    Slice min_key(min);
+    Slice max_key(max);
+
+    //std::cout<<"min_key: "<<min_key.ToString()<<" max_key: "<<max_key.ToString()<<std::endl;
+    char cache_key_buffer[sizeof(uint32_t) + max_key.size()];
+    EncodeFixed32(cache_key_buffer, r->level_);
+    memcpy(cache_key_buffer + sizeof(uint32_t), max_key.data(), max_key.size());
+    Slice cache_key(cache_key_buffer, sizeof(cache_key_buffer));
+
+    char key_buffer[16];
+    EncodeFixed64(key_buffer, r->file_number_);
+    EncodeFixed64(key_buffer + 8, r->offset);
+    Slice key(key_buffer, sizeof(key_buffer));
+
+    //std::cout<<"level: "<<r->level_<<std::endl;
+    if(r->level_ != 1){
+      cache_handle = block_cache->Insert(key, block_ptr, block_ptr->size(), &DeleteCachedBlock, true, cache_key, min_key, r->file_number_);
+    }
+    if(cache_handle != nullptr){
+      block_cache->Release(cache_handle);
+    }
+  }
+  /*else{
+    std::cout<<"Not insert compaction output block to cache"<<std::endl;
+  }*/
 
   Slice block_contents;
   CompressionType type = r->options.compression;
@@ -184,13 +269,17 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
       break;
     }
   }
-  WriteRawBlock(block_contents, type, handle);
+  WriteRawBlock(block_contents, type, handle, is_data_block); 
   r->compressed_output.clear();
+  r->from_cache_ = false;
+  r->all_key_cnt_ = 0;
+  r->from_cache_key_cnt_ = 0;
   block->Reset();
 }
 
 void TableBuilder::WriteRawBlock(const Slice& block_contents,
-                                 CompressionType type, BlockHandle* handle) {
+                                 CompressionType type, BlockHandle* handle,
+                                 const bool& is_data_block) {
   Rep* r = rep_;
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
@@ -210,12 +299,15 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
 
 Status TableBuilder::status() const { return rep_->status; }
 
-Status TableBuilder::Finish() {
+Status TableBuilder::Finish(int* insert_block_cnt) {
   Rep* r = rep_;
   Flush();
   assert(!r->closed);
   r->closed = true;
 
+  if(insert_block_cnt != nullptr){
+    *insert_block_cnt = (*insert_block_cnt) + r->insert_block_cnt_;
+  }
   BlockHandle filter_block_handle, metaindex_block_handle, index_block_handle;
 
   // Write filter block
@@ -276,5 +368,7 @@ void TableBuilder::Abandon() {
 uint64_t TableBuilder::NumEntries() const { return rep_->num_entries; }
 
 uint64_t TableBuilder::FileSize() const { return rep_->offset; }
+
+uint64_t TableBuilder::InsertBlockCnt() const { return rep_->insert_block_cnt_; }
 
 }  // namespace leveldb

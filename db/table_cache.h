@@ -14,6 +14,7 @@
 #include "leveldb/cache.h"
 #include "leveldb/table.h"
 #include "port/port.h"
+#include "leveldb/caller_type.h"
 
 namespace leveldb {
 
@@ -36,10 +37,17 @@ class TableCache {
   // by the cache and should not be deleted, and is valid for as long as the
   // returned iterator is live.
   Iterator* NewIterator(const ReadOptions& options, uint64_t file_number,
-                        uint64_t file_size, Table** tableptr = nullptr);
+                        uint64_t file_size, Table** tableptr = nullptr, 
+                        bool which = false, int level = 0,
+                         const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call (*handle_result)(arg, found_key, found_value).
+  Status Get(const ReadOptions& options, uint64_t file_number,
+             uint64_t file_size, const Slice& k, void* arg,
+             const int& level,
+             void (*handle_result)(void*, const Slice&, const Slice&));
+
   Status Get(const ReadOptions& options, uint64_t file_number,
              uint64_t file_size, const Slice& k, void* arg,
              void (*handle_result)(void*, const Slice&, const Slice&));

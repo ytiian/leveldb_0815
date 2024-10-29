@@ -18,6 +18,7 @@
 #include "leveldb/export.h"
 #include "leveldb/slice.h"
 #include "leveldb/status.h"
+#include <cstdint>
 
 namespace leveldb {
 
@@ -71,6 +72,28 @@ class LEVELDB_EXPORT Iterator {
 
   // If an error has occurred, return it.  Else return an ok status.
   virtual Status status() const = 0;
+
+  virtual bool IfCache(){
+    return false;
+  }
+  virtual bool AlreadyCounted(){
+    return true;
+  }
+  virtual bool which(){
+    return false;
+  }
+  virtual void SetIfCache(bool if_cache){
+    return;
+  }
+  virtual void SetAlreadyCounted(bool already_counted){
+    return;
+  }
+  virtual uint64_t FileNumber(){
+    return 0;
+  }
+  virtual int Level(){
+    return 0;
+  }
 
   // Clients are allowed to register function/arg1/arg2 triples that
   // will be invoked when this iterator is destroyed.

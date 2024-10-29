@@ -77,7 +77,7 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
 
 Iterator* TableCache::NewIterator(const ReadOptions& options,
                                   uint64_t file_number, uint64_t file_size,
-                                  Table** tableptr) {
+                                  Table** tableptr, bool which, int level, const CallerType& caller_type) {
   if (tableptr != nullptr) {
     *tableptr = nullptr;
   }
@@ -89,7 +89,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   }
 
   Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-  Iterator* result = table->NewIterator(options);
+  Iterator* result = table->NewIterator(options, file_number, which, level, caller_type);
   result->RegisterCleanup(&UnrefEntry, cache_, handle);
   if (tableptr != nullptr) {
     *tableptr = table;
@@ -97,6 +97,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   return result;
 }
 
+//[for L0 get]
 Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
                        uint64_t file_size, const Slice& k, void* arg,
                        void (*handle_result)(void*, const Slice&,
@@ -105,7 +106,22 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-    s = t->InternalGet(options, k, arg, handle_result);
+    s = t->InternalGet(options, k, file_number, arg, handle_result);
+    cache_->Release(handle);
+  }
+  return s;
+}
+
+//[for Not L0 get]
+Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
+                       uint64_t file_size, const Slice& k, void* arg, const int& level,
+                       void (*handle_result)(void*, const Slice&,
+                                             const Slice&)) {
+  Cache::Handle* handle = nullptr;
+  Status s = FindTable(file_number, file_size, &handle);
+  if (s.ok()) {
+    Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+    s = t->InternalGet(options, k, arg, level, file_number, handle_result);
     cache_->Release(handle);
   }
   return s;

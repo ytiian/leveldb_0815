@@ -7,6 +7,7 @@
 
 #include "leveldb/iterator.h"
 #include "leveldb/slice.h"
+#include <iostream>
 
 namespace leveldb {
 
@@ -43,6 +44,34 @@ class IteratorWrapper {
     assert(Valid());
     return iter_->value();
   }
+
+  uint64_t FileNumber(){
+    assert(Valid());
+    return file_number_;
+  }
+  int Level(){
+    assert(Valid());
+    return level_;
+  }
+  bool IfCache(){
+    assert(Valid());
+    return if_cache_;
+  }
+  bool AlreadyCounted(){
+    assert(Valid());
+    return already_counted_;
+  }
+  void SetAlreadyCounted(bool ac){
+    assert(Valid());
+    already_counted_ = ac;
+    iter_->SetAlreadyCounted(ac);
+  }
+
+  bool which(){
+    assert(Valid());
+    return iter_->which();
+  }
+
   // Methods below require iter() != nullptr
   Status status() const {
     assert(iter_);
@@ -79,12 +108,23 @@ class IteratorWrapper {
     valid_ = iter_->Valid();
     if (valid_) {
       key_ = iter_->key();
+      file_number_ = iter_->FileNumber();
+      level_ = iter_->Level();
+      if_cache_ = iter_->IfCache();
+      which_ = iter_->which();
+      already_counted_ = iter_->AlreadyCounted();
+      //std::cout<<"file_number:"<<file_number_<<std::endl;
     }
   }
 
   Iterator* iter_;
   bool valid_;
   Slice key_;
+  uint64_t file_number_;
+  int level_;
+  bool if_cache_;
+  bool already_counted_;
+  bool which_;
 };
 
 }  // namespace leveldb

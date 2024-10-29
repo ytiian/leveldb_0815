@@ -117,6 +117,34 @@ class MergingIterator : public Iterator {
     return current_->value();
   }
 
+  uint64_t FileNumber() override{
+    assert(Valid());
+    return current_->FileNumber();
+  }
+  int Level() override{
+    assert(Valid());
+    return current_->Level();
+  }
+  bool IfCache() override{
+    assert(Valid());
+    return current_->IfCache();
+  }
+  
+  bool AlreadyCounted() override{
+    assert(Valid());
+    return current_->AlreadyCounted();
+  }
+  void SetAlreadyCounted(bool ac) override{
+    assert(Valid());
+    current_->SetAlreadyCounted(ac);
+  }
+
+
+  bool which() override{
+    assert(Valid());
+    return current_->which();
+  }
+
   Status status() const override {
     Status status;
     for (int i = 0; i < n_; i++) {

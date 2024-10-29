@@ -49,7 +49,9 @@ class LEVELDB_EXPORT Table {
   // Returns a new iterator over the table contents.
   // The result of NewIterator() is initially invalid (caller must
   // call one of the Seek methods on the iterator before using it).
-  Iterator* NewIterator(const ReadOptions&) const;
+  Iterator* NewIterator(const ReadOptions& options, const uint64_t& file_number = 0, 
+            const bool& which = false, const int& level = 0,
+            const CallerType& caller_type = CallerType::kCallerTypeUnknown) const;
 
   // Given a key, return an approximate byte offset in the file where
   // the data for that key begins (or would begin if the key were
@@ -63,7 +65,11 @@ class LEVELDB_EXPORT Table {
   friend class TableCache;
   struct Rep;
 
-  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const uint64_t& file_number, const bool& which, const int& level, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+
+  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, void* saver, const int& level, const uint64_t& file_number, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+
+  static Iterator* BlockReader(void*, const ReadOptions&, const uint64_t& file_number, const Slice&, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
   explicit Table(Rep* rep) : rep_(rep) {}
 
@@ -71,8 +77,15 @@ class LEVELDB_EXPORT Table {
   // to Seek(key).  May not make such a call if filter policy says
   // that key is not present.
   Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
+                     const int& level,
+                     const uint64_t& file_number,
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
+
+  Status InternalGet(const ReadOptions&, const Slice& key, 
+                    uint64_t& file_number, void* arg,
+                    void (*handle_result)(void* arg, const Slice& k,
+                                          const Slice& v));
 
   void ReadMeta(const Footer& footer);
   void ReadFilter(const Slice& filter_handle_value);

@@ -34,10 +34,13 @@
 #include "util/coding.h"
 #include "util/logging.h"
 #include "util/mutexlock.h"
+#include "util/thpool.h"
 
 namespace leveldb {
 
 const int kNumNonTableCacheFiles = 10;
+
+int num_read_threads=1;
 
 // Information kept for every waiting writer
 struct DBImpl::Writer {
@@ -66,7 +69,8 @@ struct DBImpl::CompactionState {
         smallest_snapshot(0),
         outfile(nullptr),
         builder(nullptr),
-        total_bytes(0) {}
+        total_bytes(0),
+        insert_block_cnt(0) {}
 
   Compaction* const compaction;
 
@@ -83,6 +87,7 @@ struct DBImpl::CompactionState {
   TableBuilder* builder;
 
   uint64_t total_bytes;
+  int insert_block_cnt;
 };
 
 // Fix user-supplied options to be reasonable
@@ -155,6 +160,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       log_(nullptr),
       seed_(0),
       tmp_batch_(new WriteBatch),
+      thpool(nullptr),
       background_compaction_scheduled_(false),
       manual_compaction_(nullptr),
       versions_(new VersionSet(dbname_, &options_, table_cache_,
@@ -835,11 +841,12 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
     mutex_.Unlock();
   }
 
+  int level = compact->compaction->level()+1;
   // Make the output file
   std::string fname = TableFileName(dbname_, file_number);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
   if (s.ok()) {
-    compact->builder = new TableBuilder(options_, compact->outfile);
+    compact->builder = new TableBuilder(options_, compact->outfile, level, true, file_number);
   }
   return s;
 }
@@ -1166,7 +1173,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
       // Done
     } else {
-      s = current->Get(options, lkey, value, &stats);
+      s = current->Get(options, lkey, value, &stats, thpool);
       have_stat_update = true;
     }
     mutex_.Lock();
@@ -1523,6 +1530,11 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   DBImpl* impl = new DBImpl(options, dbname);
   impl->mutex_.Lock();
   VersionEdit edit;
+
+  if(!impl->thpool){
+    impl->thpool = thpool_init(num_read_threads);
+  }
+
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);

@@ -9,6 +9,9 @@
 #include <deque>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <queue>
+#include <thread>
 
 #include "db/dbformat.h"
 #include "db/log_writer.h"
@@ -17,6 +20,7 @@
 #include "leveldb/env.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
+#include "util/thpool.h"
 
 namespace leveldb {
 
@@ -183,6 +187,7 @@ class DBImpl : public DB {
   log::Writer* log_;
   uint32_t seed_ GUARDED_BY(mutex_);  // For sampling.
 
+  threadpool thpool;
   // Queue of writers.
   std::deque<Writer*> writers_ GUARDED_BY(mutex_);
   WriteBatch* tmp_batch_ GUARDED_BY(mutex_);

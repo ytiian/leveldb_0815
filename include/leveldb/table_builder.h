@@ -13,6 +13,8 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_TABLE_BUILDER_H_
 #define STORAGE_LEVELDB_INCLUDE_TABLE_BUILDER_H_
 
+#define THRESHOLD_VALUE 0.5
+
 #include <cstdint>
 
 #include "leveldb/export.h"
@@ -30,7 +32,8 @@ class LEVELDB_EXPORT TableBuilder {
   // Create a builder that will store the contents of the table it is
   // building in *file.  Does not close the file.  It is up to the
   // caller to close the file after calling Finish().
-  TableBuilder(const Options& options, WritableFile* file);
+  TableBuilder(const Options& options, WritableFile* file, const uint32_t& level = 0, 
+             const bool& is_compaction_output_ = false, const uint64_t& file_number = 0);
 
   TableBuilder(const TableBuilder&) = delete;
   TableBuilder& operator=(const TableBuilder&) = delete;
@@ -51,6 +54,8 @@ class LEVELDB_EXPORT TableBuilder {
   // REQUIRES: Finish(), Abandon() have not been called
   void Add(const Slice& key, const Slice& value);
 
+  uint64_t AddAndUpdateReminder(const Slice& key, const Slice& value);
+
   // Advanced operation: flush any buffered key/value pairs to file.
   // Can be used to ensure that two adjacent entries never live in
   // the same data block.  Most clients should not need to use this method.
@@ -63,7 +68,7 @@ class LEVELDB_EXPORT TableBuilder {
   // Finish building the table.  Stops using the file passed to the
   // constructor after this function returns.
   // REQUIRES: Finish(), Abandon() have not been called
-  Status Finish();
+  Status Finish(int* cnt = nullptr);
 
   // Indicate that the contents of this builder should be abandoned.  Stops
   // using the file passed to the constructor after this function returns.
@@ -79,10 +84,18 @@ class LEVELDB_EXPORT TableBuilder {
   // Finish() call, returns the size of the final generated file.
   uint64_t FileSize() const;
 
+  bool IfFromCache();
+
+  void SetFromCache();
+
+  void AddFromCacheKeyCnt();
+
+  uint64_t InsertBlockCnt() const;
+
  private:
   bool ok() const { return status().ok(); }
-  void WriteBlock(BlockBuilder* block, BlockHandle* handle);
-  void WriteRawBlock(const Slice& data, CompressionType, BlockHandle* handle);
+  void WriteBlock(BlockBuilder* block, BlockHandle* handle, const bool& is_data_block = false);
+  void WriteRawBlock(const Slice& data, CompressionType, BlockHandle* handle, const bool& is_data_block = false);
 
   struct Rep;
   Rep* rep_;
