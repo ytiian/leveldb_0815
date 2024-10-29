@@ -187,7 +187,7 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
   Slice raw = block->Finish();
   // /std::cout<<r->is_compaction_output_<<" "<<is_data_block<<" "<<r->from_cache_<<std::endl;
   //std::cout<<"from_cache_key_cnt: "<<r->from_cache_key_cnt_<<" all_key_cnt: "<<r->all_key_cnt_;
-  /*double threshold = r->from_cache_key_cnt_ / (double)r->all_key_cnt_;
+  double threshold = r->from_cache_key_cnt_ / (double)r->all_key_cnt_;
   //std::cout<<" threshold: " << threshold <<std::endl;
   if(r->is_compaction_output_ && is_data_block && threshold >= THRESHOLD_VALUE){
     //std::cout<<"Insert compaction output block to cache"<<std::endl;
@@ -221,9 +221,7 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle, const bo
     Slice key(key_buffer, sizeof(key_buffer));
 
     //std::cout<<"level: "<<r->level_<<std::endl;
-    if(r->level_ != 1){
-      cache_handle = block_cache->Insert(key, block_ptr, block_ptr->size(), &DeleteCachedBlock, true, cache_key, min_key, r->file_number_);
-    }
+    cache_handle = block_cache->Insert(key, block_ptr, block_ptr->size(), &DeleteCachedBlock, true, cache_key, min_key, r->file_number_);
     if(cache_handle != nullptr){
       block_cache->Release(cache_handle);
     }

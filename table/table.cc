@@ -234,6 +234,15 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
       }
     }
   }*/
+
+  if(caller_type == CallerType::kCompaction && iter->IfCache()){
+    if(which == false){//input level
+      iter->RegisterCleanup(&EraseOnlyOne, block_cache, cache_handle);
+    } else{
+      iter->RegisterCleanup(&EraseTwoCache, block_cache, cache_handle);
+    }
+  }
+
   return iter;
 }
 

@@ -919,6 +919,7 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
 }
 
 Status DBImpl::DoCompactionWork(CompactionState* compact) {
+  uint64_t erase_block_cnt = 0;
   const uint64_t start_micros = env_->NowMicros();
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
 
@@ -1027,6 +1028,15 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         compact->current_output()->smallest.DecodeFrom(key);
       }
       compact->current_output()->largest.DecodeFrom(key);
+      if(input->IfCache()){
+        compact->builder->AddFromCacheKeyCnt();
+      }
+      if(input->IfCache() && !input->AlreadyCounted() && input->which()){
+        erase_block_cnt ++;
+    //std::cout<<"before set:"<<input->AlreadyCounted()<<std::endl;
+        input->SetAlreadyCounted(true);
+    //std::cout<<"after set:"<<input->AlreadyCounted()<<std::endl;
+      }
       compact->builder->Add(key, input->value());
 
       // Close output file if it is big enough

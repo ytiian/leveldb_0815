@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <iostream>
 
 #include "leveldb/slice.h"
 
@@ -40,6 +41,16 @@ class BlockBuilder {
   // Return true iff no entries have been added since the last Reset()
   bool empty() const { return buffer_.empty(); }
 
+  std::string LargestKey(){
+    assert(largest_key_.size() > 0);
+    return largest_key_;
+  }
+
+  std::string SmallestKey(){
+    assert(smallest_key_.size() > 0);
+    return smallest_key_;
+  }
+
  private:
   const Options* options_;
   std::string buffer_;              // Destination buffer
@@ -47,6 +58,8 @@ class BlockBuilder {
   int counter_;                     // Number of entries emitted since restart
   bool finished_;                   // Has Finish() been called?
   std::string last_key_;
+  std::string largest_key_;
+  std::string smallest_key_;
 };
 
 }  // namespace leveldb
