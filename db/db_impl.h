@@ -21,6 +21,7 @@
 #include "port/port.h"
 #include "port/thread_annotations.h"
 #include "util/thpool.h"
+#include "db/L0_reminder.h"
 
 namespace leveldb {
 
@@ -29,6 +30,7 @@ class TableCache;
 class Version;
 class VersionEdit;
 class VersionSet;
+class L0_Reminder;
 
 class DBImpl : public DB {
  public:
@@ -74,6 +76,10 @@ class DBImpl : public DB {
   // Samples are taken approximately once every config::kReadBytesPeriod
   // bytes.
   void RecordReadSample(Slice key);
+  
+  void ReminderRemoveThread();
+
+  void StopReminderRemoveThread();
 
  private:
   friend class DB;
@@ -172,6 +178,8 @@ class DBImpl : public DB {
   // table_cache_ provides its own synchronization
   TableCache* const table_cache_;
 
+  L0_Reminder* l0_reminder_;
+
   // Lock over the persistent DB state.  Non-null iff successfully acquired.
   FileLock* db_lock_;
 
@@ -209,6 +217,17 @@ class DBImpl : public DB {
   Status bg_error_ GUARDED_BY(mutex_);
 
   CompactionStats stats_[config::kNumLevels] GUARDED_BY(mutex_);
+
+  std::mutex done_files_mutex_;
+  std::queue<uint64_t> done_files_;
+
+  std::condition_variable cv_;
+  std::mutex map_mutex_;
+  std::unordered_map<uint64_t, std::queue<L0ReminderEntry*>> reminder_map_; //file to queue
+  std::queue<L0ReminderEntry*> now_queue_;
+
+  std::atomic<bool> stop_thread_;
+  std::thread reminder_thread_;
 };
 
 // Sanitize db options.  The caller should delete result.info_log if

@@ -128,6 +128,8 @@ target_sources(leveldb
     "db/db_impl.h"
     "db/db_iter.cc"
     "db/db_iter.h"
+    "db/L0_reminder.h"
+    "db/L0_reminder.cc"
     "db/dbformat.cc"
     "db/dbformat.h"
     "db/dumpfile.cc"

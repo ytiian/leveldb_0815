@@ -25,6 +25,7 @@
 #include "port/port.h"
 #include "port/thread_annotations.h"
 #include "util/thpool.h"
+#include "db/L0_reminder.h"
 
 namespace leveldb {
 
@@ -77,6 +78,9 @@ class Version {
   Status Get(const ReadOptions&, const LookupKey& key, std::string* val,
              GetStats* stats, threadpool thpool = nullptr);
 
+  Status GetWithReminder(const ReadOptions& options, const LookupKey& k, 
+            std::string* value, const Slice& reminder_result, bool* need_search);
+
   // Adds "stats" into the current state.  Returns true if a new
   // compaction may need to be triggered, false otherwise.
   // REQUIRES: lock is held
@@ -115,6 +119,9 @@ class Version {
 
   static void *read_thread(void *arg);
 
+  void AddFileToQueue(uint64_t file, uint64_t file_size,
+               const InternalKey& smallest, const InternalKey& largest);
+
   // Return a human readable string that describes this version's contents.
   std::string DebugString() const;
 
@@ -132,7 +139,7 @@ class Version {
   }read_struct;
 
   std::mutex interState_files_mutex_;
-  std::queue<FileMetaData*> interState_files_; //L0-L1computation output file that has been downloaded but not yet applied
+  std::vector<FileMetaData*> interState_files_; //L0-L1computation output file that has been downloaded but not yet applied
 
   friend class Compaction;
   friend class VersionSet;
@@ -212,6 +219,7 @@ class VersionSet {
   // Recover the last saved descriptor from persistent storage.
   Status Recover(bool* save_manifest);
 
+  Status RecoverL0Reminder(L0_Reminder* L0_Reminder);
   // Return the current version.
   Version* current() const { return current_; }
 
@@ -384,6 +392,10 @@ class Compaction {
   // Release the input version for the compaction, once the compaction
   // is successful.
   void ReleaseInputs();
+
+  bool IfInInputFiles(const uint64_t file_number);
+
+  Version* Get_version() { return input_version_; }
 
  private:
   friend class Version;

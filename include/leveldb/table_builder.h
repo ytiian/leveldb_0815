@@ -20,6 +20,7 @@
 #include "leveldb/export.h"
 #include "leveldb/options.h"
 #include "leveldb/status.h"
+#include "db/L0_reminder.h"
 
 namespace leveldb {
 
@@ -33,7 +34,8 @@ class LEVELDB_EXPORT TableBuilder {
   // building in *file.  Does not close the file.  It is up to the
   // caller to close the file after calling Finish().
   TableBuilder(const Options& options, WritableFile* file, const uint32_t& level = 0, 
-             const bool& is_compaction_output_ = false, const uint64_t& file_number = 0);
+             const bool& is_compaction_output_ = false, const uint64_t& file_number = 0,
+             L0_Reminder* l0_reminder = nullptr);
 
   TableBuilder(const TableBuilder&) = delete;
   TableBuilder& operator=(const TableBuilder&) = delete;
@@ -54,7 +56,7 @@ class LEVELDB_EXPORT TableBuilder {
   // REQUIRES: Finish(), Abandon() have not been called
   void Add(const Slice& key, const Slice& value);
 
-  uint64_t AddAndUpdateReminder(const Slice& key, const Slice& value);
+  uint64_t AddAndUpdateReminder(const Slice& key, const Slice& value, L0_Reminder* l0_reminder);
 
   // Advanced operation: flush any buffered key/value pairs to file.
   // Can be used to ensure that two adjacent entries never live in
@@ -96,6 +98,7 @@ class LEVELDB_EXPORT TableBuilder {
   bool ok() const { return status().ok(); }
   void WriteBlock(BlockBuilder* block, BlockHandle* handle, const bool& is_data_block = false);
   void WriteRawBlock(const Slice& data, CompressionType, BlockHandle* handle, const bool& is_data_block = false);
+  std::queue<L0ReminderEntry> entries;
 
   struct Rep;
   Rep* rep_;

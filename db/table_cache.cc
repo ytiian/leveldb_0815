@@ -97,7 +97,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   return result;
 }
 
-//[for L0 get]
+//[for inter files]
 Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
                        uint64_t file_size, const Slice& k, void* arg,
                        void (*handle_result)(void*, const Slice&,
@@ -106,7 +106,7 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-    s = t->InternalGet(options, k, file_number, arg, handle_result);
+    s = t->InternalGet(options, k, arg, handle_result);
     cache_->Release(handle);
   }
   return s;
@@ -125,6 +125,22 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
     cache_->Release(handle);
   }
   return s;
+}
+
+//[for L0 get]
+Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
+                       uint64_t file_size, const Slice& k, void* arg,
+                       const Slice& reminder_result,
+                       void (*handle_result)(void*, const Slice&,
+                                             const Slice&)){
+  Cache::Handle* handle = nullptr;
+  Status s = FindTable(file_number, file_size, &handle);
+  if (s.ok()) {
+    Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+    s = t->InternalGet(options, k, arg, reminder_result, handle_result);
+    cache_->Release(handle);
+  }
+  return s;                                            
 }
 
 void TableCache::Evict(uint64_t file_number) {

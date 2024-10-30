@@ -17,12 +17,13 @@
 #include "util/crc32c.h"
 #include "table/block.h"
 #include "leveldb/cache.h"
+#include "db/L0_reminder.h"
 
 namespace leveldb {
 
 struct TableBuilder::Rep {
   Rep(const Options& opt, WritableFile* f, const uint32_t& level, const bool& is_compaction_output, 
-                            const uint64_t& file_number)
+                            const uint64_t& file_number, L0_Reminder* l0_reminder)
       : options(opt),
         index_block_options(opt),
         file(f),
@@ -31,13 +32,14 @@ struct TableBuilder::Rep {
         index_block(&index_block_options),
         num_entries(0),
         closed(false),
-        level_(level),
-        is_compaction_output_(is_compaction_output),
-        from_cache_(false),
-        file_number_(file_number),
         all_key_cnt_(0),
         from_cache_key_cnt_(0),
         insert_block_cnt_(0),
+        level_(level),
+        is_compaction_output_(is_compaction_output),
+        from_cache_(false),
+        l0_reminder_(l0_reminder),
+        file_number_(file_number),
         filter_block(opt.filter_policy == nullptr
                          ? nullptr
                          : new FilterBlockBuilder(opt.filter_policy)),
@@ -45,6 +47,7 @@ struct TableBuilder::Rep {
     index_block_options.block_restart_interval = 1;
   }
 
+  L0_Reminder* l0_reminder_;
   Options options;
   Options index_block_options;
   WritableFile* file;
@@ -63,6 +66,7 @@ struct TableBuilder::Rep {
   uint64_t all_key_cnt_;
   uint64_t from_cache_key_cnt_;
   uint64_t insert_block_cnt_;
+  std::queue<std::string> keys_;
 
   // We do not emit the index entry for a block until we have seen the
   // first key for the next data block.  This allows us to use shorter
@@ -81,8 +85,8 @@ struct TableBuilder::Rep {
 
 TableBuilder::TableBuilder(const Options& options, WritableFile* file, 
                           const uint32_t& level, const bool& is_compaction_output_,
-                          const uint64_t& file_number)
-    : rep_(new Rep(options, file, level, is_compaction_output_, file_number)) {
+                          const uint64_t& file_number, L0_Reminder* l0_reminder)
+    : rep_(new Rep(options, file, level, is_compaction_output_, file_number, l0_reminder)) {
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
@@ -93,6 +97,9 @@ TableBuilder::~TableBuilder() {
   delete rep_->filter_block;
   delete rep_;
 }
+void TableBuilder::AddFromCacheKeyCnt(){
+  rep_->from_cache_key_cnt_++;
+}
 
 bool TableBuilder::IfFromCache(){
   return rep_-> from_cache_;
@@ -100,10 +107,6 @@ bool TableBuilder::IfFromCache(){
 
 void TableBuilder::SetFromCache() {
   rep_-> from_cache_ = true;
-}
-
-void TableBuilder::AddFromCacheKeyCnt(){
-  rep_->from_cache_key_cnt_++;
 }
 
 Status TableBuilder::ChangeOptions(const Options& options) {
@@ -130,11 +133,6 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
-  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
-  if (estimated_block_size >= r->options.block_size) {
-    Flush();
-  }
-
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
     //changes *start to a short string in [start,limit).
@@ -151,10 +149,17 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 
   r->last_key.assign(key.data(), key.size());
   r->num_entries++;
-  r->all_key_cnt_++;
   r->data_block.Add(key, value);
+  if(r->l0_reminder_ != nullptr){
+    r->keys_.push(key.ToString());
+  }
 
+  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  if (estimated_block_size >= r->options.block_size) {
+    Flush();
+  }
 }
+
 
 void TableBuilder::Flush() {
   Rep* r = rep_;
@@ -279,6 +284,17 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
                                  CompressionType type, BlockHandle* handle,
                                  const bool& is_data_block) {
   Rep* r = rep_;
+  if(is_data_block){
+    while(!r->keys_.empty()){
+      std::string buf;
+      PutVarint64(&buf, r->file_number_);
+      PutVarint64(&buf, r->offset);
+      PutVarint64(&buf, block_contents.size());
+      const Slice& key = r->keys_.front();
+      r->l0_reminder_->WriteToReminder(key, Slice(buf));
+      r->keys_.pop();
+    }
+  }
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
   r->status = r->file->Append(block_contents);

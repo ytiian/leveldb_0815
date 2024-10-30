@@ -16,7 +16,10 @@ class Env;
 class Iterator;
 class TableCache;
 class VersionEdit;
+class L0_Reminder;
 
+Status BuildL0Table(const std::string& dbname, Env* env, const Options& options,
+                  TableCache* table_cache, L0_Reminder* l0_reminder, Iterator* iter, FileMetaData* meta);
 // Build a Table file from the contents of *iter.  The generated file
 // will be named according to meta->number.  On success, the rest of
 // *meta will be filled with metadata about the generated table.

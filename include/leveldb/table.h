@@ -65,11 +65,14 @@ class LEVELDB_EXPORT Table {
   friend class TableCache;
   struct Rep;
 
+//[for compaction][for scan]
   static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const uint64_t& file_number, const bool& which, const int& level, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
+//[for Not L0 get]
   static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, void* saver, const int& level, const uint64_t& file_number, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
-  static Iterator* BlockReader(void*, const ReadOptions&, const uint64_t& file_number, const Slice&, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+//[for L0 get]
+  Iterator* BlockReader(void* arg, const ReadOptions& options, const Slice& index_value, const uint64_t& file_number, const bool& which, const CallerType& caller_type);
 
   explicit Table(Rep* rep) : rep_(rep) {}
 
@@ -82,10 +85,14 @@ class LEVELDB_EXPORT Table {
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
 
-  Status InternalGet(const ReadOptions&, const Slice& key, 
-                    const uint64_t& file_number, void* arg,
-                    void (*handle_result)(void* arg, const Slice& k,
-                                          const Slice& v));
+  Status InternalGet(const ReadOptions& options, const Slice& k, void* arg,
+                          void (*handle_result)(void*, const Slice&,
+                                                const Slice&));
+
+  Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
+                     const Slice& reminder_result,
+                     void (*handle_result)(void* arg, const Slice& k,
+                                           const Slice& v));
 
   void ReadMeta(const Footer& footer);
   void ReadFilter(const Slice& filter_handle_value);

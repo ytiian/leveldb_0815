@@ -73,6 +73,7 @@ class IteratorWrapper {
   }
 
   // Methods below require iter() != nullptr
+
   Status status() const {
     assert(iter_);
     return iter_->status();
