@@ -377,7 +377,7 @@ static void thread_init (thpool_* thpool_p, struct thread** thread_p, int id){
 
     pthread_create(&(*thread_p)->pthread, NULL, thread_do, (*thread_p));
     //pthread_detach((*thread_p)->pthread);
-    th_setaffinity(&(*thread_p)->pthread, 0);
+    //th_setaffinity(&(*thread_p)->pthread, 0);
 }
 
 
