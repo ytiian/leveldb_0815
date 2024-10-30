@@ -379,7 +379,7 @@ Iterator* Table::NewIterator(const ReadOptions& options, const uint64_t& file_nu
 
 //[for L0 get]
 Status Table::InternalGet(const ReadOptions& options, const Slice& k, 
-                            uint64_t& file_number, void* arg,
+                          const uint64_t& file_number, void* arg,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)) {
   Status s;
