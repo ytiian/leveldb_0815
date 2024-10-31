@@ -133,6 +133,11 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
+  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  if (estimated_block_size >= r->options.block_size) {
+    Flush();
+  }
+
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
     //changes *start to a short string in [start,limit).
@@ -149,14 +154,10 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 
   r->last_key.assign(key.data(), key.size());
   r->num_entries++;
+  r->all_key_cnt_++;
   r->data_block.Add(key, value);
   if(r->l0_reminder_ != nullptr){
     r->keys_.push(key.ToString());
-  }
-
-  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
-  if (estimated_block_size >= r->options.block_size) {
-    Flush();
   }
 }
 

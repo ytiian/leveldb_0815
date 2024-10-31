@@ -329,7 +329,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
     BlockContents contents;
     if (block_cache != nullptr) {
       char cache_key_buffer[16];
-      EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
+      EncodeFixed64(cache_key_buffer, file_number);
       EncodeFixed64(cache_key_buffer + 8, handle.offset());
       Slice key(cache_key_buffer, sizeof(cache_key_buffer));
       cache_handle = block_cache->Lookup(key);
@@ -425,7 +425,7 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
   Slice input = reminder_result;
   uint64_t number, offset, size;
   GetVarint64(&input, &number);
-  Iterator* block_iter = BlockReader(this, options, input, 0, false, CallerType::kGet);
+  Iterator* block_iter = BlockReader(this, options, input, number, false, CallerType::kGet);
   block_iter->Seek(k);
   if (block_iter->Valid()) {
     (*handle_result)(arg, block_iter->key(), block_iter->value());
@@ -463,7 +463,8 @@ uint64_t Table::ApproximateOffsetOf(const Slice& key) const {
 }
 
 //[for inter files]
-Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
+Status Table::InternalGet(const ReadOptions& options, const Slice& k,
+                          const uint64_t& file_number, void* arg,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)) {
   Status s;
@@ -477,7 +478,7 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
     } else {
-      Iterator* block_iter = BlockReader(this, options, iiter->value(), 0, false, CallerType::kGet);
+      Iterator* block_iter = BlockReader(this, options, iiter->value(), file_number, false, CallerType::kGet);
       block_iter->Seek(k);
       if (block_iter->Valid()) {
         (*handle_result)(arg, block_iter->key(), block_iter->value());

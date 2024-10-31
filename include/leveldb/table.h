@@ -85,7 +85,9 @@ class LEVELDB_EXPORT Table {
                      void (*handle_result)(void* arg, const Slice& k,
                                            const Slice& v));
 
-  Status InternalGet(const ReadOptions& options, const Slice& k, void* arg,
+  //[for inter files]
+  Status InternalGet(const ReadOptions& options, const Slice& k,
+                          const uint64_t& file_number, void* arg,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&));
 

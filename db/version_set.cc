@@ -343,7 +343,7 @@ void Version::AddFileToQueue(uint64_t file, uint64_t file_size,
   f->smallest = smallest;
   f->largest = largest;
   interState_files_.push_back(f);    
-  std::cout<<"now_queue_size:"<<interState_files_.size()<<std::endl;          
+  //std::cout<<"now_queue_size:"<<interState_files_.size()<<std::endl;          
 }
 
 void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
@@ -440,6 +440,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
     Status s;
     bool found;
 
+    //[for Not L0 Cache]
     static void ReadFromCache(void* arg, int level){
       State* state = reinterpret_cast<State*>(arg);
 
@@ -456,6 +457,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
     
     }
 
+    //[for Not L0 IO]
     static bool Match(void* arg, int level, FileMetaData* f) {
       State* state = reinterpret_cast<State*>(arg);
 
@@ -496,6 +498,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
       return false;
     }
 
+    //[for inter files]
     static bool MatchForL0(void* arg, int level, FileMetaData* f) {
       State* state = reinterpret_cast<State*>(arg);
 
