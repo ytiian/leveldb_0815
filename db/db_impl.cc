@@ -34,10 +34,14 @@
 #include "util/coding.h"
 #include "util/logging.h"
 #include "util/mutexlock.h"
+#include "util/thpool.h"
+#include "util/thpool.cc"
 
 namespace leveldb {
 
 const int kNumNonTableCacheFiles = 10;
+
+int num_read_threads=1;
 
 // Information kept for every waiting writer
 struct DBImpl::Writer {
@@ -155,6 +159,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       log_(nullptr),
       seed_(0),
       tmp_batch_(new WriteBatch),
+      thpool(nullptr),
       background_compaction_scheduled_(false),
       manual_compaction_(nullptr),
       versions_(new VersionSet(dbname_, &options_, table_cache_,
@@ -1523,6 +1528,10 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   DBImpl* impl = new DBImpl(options, dbname);
   impl->mutex_.Lock();
   VersionEdit edit;
+
+  if(!impl->thpool){
+    impl->thpool = thpool_init(num_read_threads);
+  }
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);

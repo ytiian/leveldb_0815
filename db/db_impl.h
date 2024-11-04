@@ -17,6 +17,7 @@
 #include "leveldb/env.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
+#include "util/thpool.h"
 
 namespace leveldb {
 
@@ -188,6 +189,8 @@ class DBImpl : public DB {
   WriteBatch* tmp_batch_ GUARDED_BY(mutex_);
 
   SnapshotList snapshots_ GUARDED_BY(mutex_);
+
+  threadpool thpool;
 
   // Set of table files to protect from deletion because they are
   // part of ongoing compactions.
