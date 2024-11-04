@@ -22,7 +22,7 @@ struct Saver {
   std::string* value;
   Cache::Handle* cache_handle[config::kNumLevels];
   std::atomic<int> status[config::kNumLevels];
-  
+  int base_level;
 };
 } // namespace
 

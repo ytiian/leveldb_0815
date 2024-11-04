@@ -269,7 +269,7 @@ void Version::ThreadA_ReadUseIO(Slice user_key, Slice internal_key, void* arg,
                         bool (*ReadUseIO)(void*, int, FileMetaData*),
                         const Comparator* ucmp) {
   Saver* s = reinterpret_cast<Saver*>(arg);
-  for (int level = 1; level < config::kNumLevels; level++) {
+  for (int level = s->base_level; level < config::kNumLevels; level++) {
     size_t num_files = files_[level].size();
     if (num_files == 0) {
       continue;
@@ -297,7 +297,7 @@ void Version::ThreadA_ReadUseIO(Slice user_key, Slice internal_key, void* arg,
 
 void Version::ThreadB_ReadFromCache(void* arg, void (*ReadFromCache)(void*, int)) {
   Saver* s = reinterpret_cast<Saver*>(arg);
-  for (int level = 1; level < config::kNumLevels; level++) {
+  for (int level = s->base_level; level < config::kNumLevels; level++) {
     if(stop){
       return;
     }
@@ -355,6 +355,7 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
   const Comparator* ucmp = vset_->icmp_.user_comparator();
 
   FileMetaData* f = nullptr;
+
   int now_size;
   {
       std::unique_lock<std::mutex> lock(interState_files_mutex_);
@@ -364,11 +365,16 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
       now_size = interState_files_.size();
   }
 
+  bool match_file = false;
   for (int i = 0; i < now_size; ++i){
+    if(match_file){
+      break;
+    }
     FileMetaData* f = interState_files_[i];
     if (ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0) { 
         continue;
     }
+    match_file = true;
     if (!(*func)(arg, 1, f)) { // false means stop searching
         //std::cout<<"found in interState_files_"<<std::endl;                  
         return;
@@ -377,6 +383,8 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
 
 
   stop = false;
+
+  s->base_level = match_file ? 2 : 1;
 
   for (int level = 1; level < config::kNumLevels; level++) {
     s->status[level] = SEARCH_INIT;
