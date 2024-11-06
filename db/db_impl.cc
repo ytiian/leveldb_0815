@@ -1229,8 +1229,10 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     bool need_search = true;
     if (mem->Get(lkey, value, &s)) {
       // Done
+      need_search = false;
     } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
       // Done
+      need_search = false;
     } else if ((result = l0_reminder_->ReadFromReminder(key)) != nullptr){
       Slice reminder_result = result->value();
       s = current->GetWithReminder(options, lkey, value, reminder_result, &need_search);  
