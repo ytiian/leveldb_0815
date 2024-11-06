@@ -10,8 +10,11 @@
 #include "table/block.h"
 #include "util/coding.h"
 #include "util/crc32c.h"
+#include <memory>
 
 namespace leveldb {
+
+using AlignedBuf = std::unique_ptr<char[]>;
 
 void BlockHandle::EncodeTo(std::string* dst) const {
   // Sanity check that all fields have been set
@@ -71,13 +74,13 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   result->data = Slice();
   result->cachable = false;
   result->heap_allocated = false;
-
+  AlignedBuf direct_io_buf_;
   // Read the block contents as well as the type/crc footer.
   // See table_builder.cc for the code that built this structure.
   size_t n = static_cast<size_t>(handle.size());
   char* buf = new char[n + kBlockTrailerSize];
   Slice contents;
-  Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
+  Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf, &direct_io_buf_);
   if (!s.ok()) {
     delete[] buf;
     return s;
@@ -100,8 +103,8 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   }
 
   switch (data[n]) {
-    case kNoCompression:
-      if (data != buf) {
+    case kNoCompression:{
+      /*if (data != buf) {
         // File implementation gave us pointer to some other data.
         // Use it directly under the assumption that it will be live
         // while the file is open.
@@ -113,10 +116,18 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
         result->data = Slice(buf, n);
         result->heap_allocated = true;
         result->cachable = true;
-      }
+      }*/
+      assert(data != buf);
+      char* ubuf = new char[n];
+      memcpy(ubuf, data, n);
+      delete[] buf;
+      result->data = Slice(ubuf, n);
+      result->heap_allocated = true;
+      result->cachable = true;      
 
       // Ok
       break;
+    }
     case kSnappyCompression: {
       size_t ulength = 0;
       if (!port::Snappy_GetUncompressedLength(data, n, &ulength)) {

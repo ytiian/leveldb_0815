@@ -1254,6 +1254,17 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
   return s;
 }
 
+Status DBImpl::Update(const leveldb::WriteOptions& options,
+                      const leveldb::Slice& key,
+                      const leveldb::Slice& value) {
+  std::string result;
+  Status s = Get(ReadOptions(), key, &result);
+  if (!s.IsNotFound()) {
+    s = Put(options, key, value);
+  } 
+  return s;
+}
+
 Iterator* DBImpl::NewIterator(const ReadOptions& options) {
   SequenceNumber latest_snapshot;
   uint32_t seed;

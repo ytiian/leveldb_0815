@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <inttypes.h>
+#include <unordered_map>
 
 #include "leveldb/cache.h"
 #include "leveldb/comparator.h"
@@ -149,6 +150,22 @@ static int FLAGS_zipfian_init_num = 1000000; //int max value = 2147483647
 static double FLAGS_zipfian_theta = 0.99;
 
 static struct zipf_gen_state zipf_state;
+
+// trace dir
+static std::string FLAGS_trace;
+static bool FLAGS_ycsb = false;
+
+// Trace operation for YCSB
+struct Operation {
+  char operation_type;
+  uint64_t key;
+  uint64_t length;
+};
+
+std::vector<Operation> ycsb_trace;
+
+//static std::unordered_map<std::string, leveldb::Histogram> ycsb_histogram_;
+
 
 namespace leveldb {
 
@@ -367,6 +384,7 @@ class Stats {
   int next_report_;
   int64_t bytes_;
   double last_op_finish_;
+  double last_op_micros_;
   Histogram hist_;
   std::string message_;
   ReporterAgent* reporter_agent_;  // does not own
@@ -407,6 +425,10 @@ class Stats {
 
   void AddMessage(Slice msg) { AppendWithSpace(&message_, msg); }
 
+  const double LastOperationMicros() {
+    return last_op_micros_;
+  }
+
   void FinishedSingleOp() {
     if (reporter_agent_) {
       reporter_agent_->ReportFinishedOps(1); //to do
@@ -420,6 +442,7 @@ class Stats {
         std::fflush(stderr);
       }
       last_op_finish_ = now;
+      last_op_micros_ = micros;
     }
 
     done_++;
@@ -681,9 +704,51 @@ class Benchmark {
     delete filter_policy_;
   }
 
+  void LoadTrace(const std::string& trace_name) {
+    int count = FLAGS_num;
+    FILE* trace_file = fopen(trace_name.c_str(), "r");
+    if (trace_file == NULL) {
+      fprintf(stderr, "Error while opening trace file %s\n", trace_name.c_str());
+      exit(1);
+    }
+    // preparing trace
+    fprintf(stdout, "Reading trace\n");
+    size_t bufsize = 100;
+    char* buf = new char[100];
+    int status;
+    //int status = getline(&buf, &bufsize, trace_file);
+    //assert(status > 1);
+    //uint64_t count;
+    //sscanf(buf, "%lu\n", &count);
+    ycsb_trace.clear();
+    ycsb_trace.reserve(count);
+    for (uint64_t i = 0; i < count; i++) {
+      status = getline(&buf, &bufsize, trace_file);
+      assert(status > 1);
+      Operation operation;
+      sscanf(buf, "%c %lu %lu\n", &operation.operation_type, &operation.key, &operation.length);
+      ycsb_trace.emplace_back(operation);
+    }
+    delete[] buf;
+    fclose(trace_file);
+    fprintf(stdout, "Finished reading trace\n");
+    // clearing performance counters
+    /*for (auto& operations : ycsb_histogram_) {
+      operations.second.Clear();
+    }*/
+  }
+
   void Run() {
     PrintHeader();
     Open();
+
+    /*if (FLAGS_ycsb) {
+      // init performance counter for operations YCSB
+      ycsb_histogram_.insert({"insert", Histogram()});
+      ycsb_histogram_.insert({"read", Histogram()});
+      ycsb_histogram_.insert({"update", Histogram()});
+      ycsb_histogram_.insert({"scan", Histogram()});
+    }*/
 
     const char* benchmarks = FLAGS_benchmarks;
     while (benchmarks != nullptr) {
@@ -779,6 +844,34 @@ class Benchmark {
         PrintStats("leveldb.stats");
       } else if (name == Slice("sstables")) {
         PrintStats("leveldb.sstables");
+      } else if (name == Slice("loadworkload")) {
+        std::string trace_name = FLAGS_trace + "/warm.txt";
+        LoadTrace(trace_name);
+        method = &Benchmark::RunTrace;
+      } else if (name == Slice("workloada")) {
+        std::string trace_name = FLAGS_trace + "/workloada.txt";
+        LoadTrace(trace_name);
+        method = &Benchmark::RunTrace;
+      } else if (name == Slice("workloadb")) {
+        std::string trace_name = FLAGS_trace + "/workloadb.txt";
+        LoadTrace(trace_name);
+        method = &Benchmark::RunTrace;
+      } else if (name == Slice("workloadc")) {
+        std::string trace_name = FLAGS_trace + "/workloadc.txt";
+        LoadTrace(trace_name);
+        method = &Benchmark::RunTrace;
+      } else if (name == Slice("workloadd")) {
+        std::string trace_name = FLAGS_trace + "/workloadd.txt";
+        LoadTrace(trace_name);
+        method = &Benchmark::RunTrace;
+      } else if (name == Slice("workloade")) {
+        std::string trace_name = FLAGS_trace + "/workloade.txt";
+        LoadTrace(trace_name);
+        method = &Benchmark::RunTrace;
+      } else if (name == Slice("workloadf")) {
+        std::string trace_name = FLAGS_trace + "/workloadf.txt";
+        LoadTrace(trace_name);
+        method = &Benchmark::RunTrace;
       } else {
         if (!name.empty()) {  // No error message for empty name
           std::fprintf(stderr, "unknown benchmark '%s'\n",
@@ -801,6 +894,13 @@ class Benchmark {
 
       if (method != nullptr) {
         RunBenchmark(num_threads, name, method);
+        /*if(FLAGS_ycsb){
+          for (const auto& histogram : ycsb_histogram_) {
+            fprintf(stdout, "%s\n", histogram.first.c_str());
+            fprintf(stdout, "%s", histogram.second.GetInfo().c_str());
+            fflush(stdout);
+          }
+        }*/
       }
     }
   }
@@ -1240,6 +1340,75 @@ class Benchmark {
     }
   }
 
+  void RunTrace(ThreadState* thread) {
+    int64_t found = 0;
+    int64_t reads_done = 0;
+    int64_t inserts_done = 0;
+    int64_t updates_done = 0;
+    int64_t scans_done = 0;
+    RandomGenerator gen;
+    ReadOptions read_operations;
+    WriteBatch batch;
+    for (const auto& operation : ycsb_trace) {
+      Status s;
+      if (operation.operation_type == 'I') {
+        char key[100];
+        snprintf(key, sizeof(key), "%020lu", operation.key);
+        s = db_->Put(write_options_, key, gen.Generate(value_size_));
+        thread->stats.FinishedSingleOp();
+        inserts_done++;
+        //ycsb_histogram_.at("insert").Add(thread->stats.LastOperationMicros());
+      } else if (operation.operation_type == 'R') {
+        char key[100];
+        snprintf(key, sizeof(key), "%020lu", operation.key);
+        std::string value;
+        s = db_->Get(read_operations, key, &value);
+        thread->stats.FinishedSingleOp();
+        if (!s.ok() && !s.IsNotFound()) {
+          fprintf(stderr, "get error: %s\n", s.ToString().c_str());
+          // we continue after error rather than exiting so that we can
+          // find more errors if any
+        } else if (!s.IsNotFound()) {
+          found++;
+        }        
+        reads_done++;
+        //ycsb_histogram_.at("read").Add(thread->stats.LastOperationMicros());
+      } else if (operation.operation_type == 'U') {
+        char key[100];
+        snprintf(key, sizeof(key), "%020lu", operation.key);
+        s = db_->Update(write_options_, key, gen.Generate(value_size_));           
+        thread->stats.FinishedSingleOp();
+        //ycsb_histogram_.at("update").Add(thread->stats.LastOperationMicros());
+        updates_done++;
+      } else if (operation.operation_type == 'S') {
+        char key[100];
+        snprintf(key, sizeof(key), "%020lu", operation.key);
+        int i = 0;
+        Iterator* it = db_->NewIterator(read_operations);
+        for (it->Seek(key); it->Valid() && i < operation.length; it->Next()) {
+          uint64_t size = it->key().ToString().size() + it->value().ToString().size();
+          i++;
+          thread->stats.FinishedSingleOp();
+          //ycsb_histogram_.at("scan").Add(thread->stats.LastOperationMicros());
+        }
+        delete it;
+        scans_done++;
+      }
+      /*if (!s.ok()) {
+        fprintf(stderr, "Error: %s\n", s.ToString().c_str());
+        exit(1);
+      }*/
+    }
+    char msg[100];
+    snprintf(msg, sizeof(msg),
+             "( reads:%" PRIu64 " inserts:%" PRIu64
+              " updates:%" PRIu64 " scans:%" PRIu64
+             " total:%" PRIu64 " found:%" PRIu64 ")",
+             reads_done, inserts_done, updates_done, scans_done,
+              reads_done + inserts_done + updates_done + scans_done, found);
+    thread->stats.AddMessage(msg);
+  }
+
   void Compact(ThreadState* thread) { db_->CompactRange(nullptr, nullptr); }
 
   void PrintStats(const char* key) {
@@ -1349,6 +1518,9 @@ int main(int argc, char** argv) {
       FLAGS_zipfian_init_num = n;
     } else if (sscanf(argv[i], "--zipfian_theta=%lf%c", &d, &junk) == 1) {
       FLAGS_zipfian_theta = d;
+    } else if (strncmp(argv[i], "--trace_dir=", 12) == 0) {
+      FLAGS_trace = argv[i] + 12;
+      FLAGS_ycsb = true;
     } else {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);

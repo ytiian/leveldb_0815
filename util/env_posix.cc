@@ -204,8 +204,14 @@ class PosixRandomAccessFile final : public RandomAccessFile {
     return kDefaultPageSize;
   }
 
-  Status Read(uint64_t offset, size_t n, Slice* result, char* scratch) const override {                                    
-    AlignedBuf* aligned_buf = new AlignedBuf();
+  Status Read(uint64_t offset, size_t n, Slice* result, char* scratch) const override { 
+    return Status::OK(); 
+  }
+
+  Status Read(uint64_t offset, size_t n, Slice* result, char* scratch, AlignedBuf* aligned_buf) const override {                                    
+    //AlignedBuf tmp; 
+    //AlignedBuf* aligned_buf = &tmp;
+    //AlignedBuf* aligned_buf = new AlignedBuf();
     (void)aligned_buf;
     // To be paranoid: modify scratch a little bit, so in case underlying
     // FileSystem doesn't fill the buffer but return success and `scratch` returns
