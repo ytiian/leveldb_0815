@@ -12,3 +12,7 @@ report.csv
 test_result/
 tmp.txt
 test_shell/
+ycsb_shell/
+ycsb_trace_4e7/
+ycsb_trace_test/
+tips

@@ -42,11 +42,11 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
   if (size < Footer::kEncodedLength) {
     return Status::Corruption("file is too short to be an sstable");
   }
-
+  AlignedBuf direct_io_buf_;
   char footer_space[Footer::kEncodedLength];
   Slice footer_input;
   Status s = file->Read(size - Footer::kEncodedLength, Footer::kEncodedLength,
-                        &footer_input, footer_space);
+                        &footer_input, footer_space, &direct_io_buf_);
   if (!s.ok()) return s;
 
   Footer footer;

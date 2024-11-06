@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <memory>
 
 #include "leveldb/export.h"
 #include "leveldb/status.h"
@@ -40,6 +41,8 @@
 #endif  // defined(_WIN32)
 
 namespace leveldb {
+
+using AlignedBuf = std::unique_ptr<char[]>;
 
 class FileLock;
 class Logger;
@@ -269,6 +272,9 @@ class LEVELDB_EXPORT RandomAccessFile {
   // Safe for concurrent use by multiple threads.
   virtual Status Read(uint64_t offset, size_t n, Slice* result,
                       char* scratch) const = 0;
+
+  virtual Status Read(uint64_t offset, size_t n, Slice* result,
+                      char* scratch, AlignedBuf* aligned_buf) const {return Status::OK();}
 };
 
 // A file abstraction for sequential writing.  The implementation
