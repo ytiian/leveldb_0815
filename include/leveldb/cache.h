@@ -123,7 +123,7 @@ class LEVELDB_EXPORT Cache {
     } 
   }
 
-  // µÝÔöcache_misses_
+  // ï¿½ï¿½ï¿½ï¿½cache_misses_
   void IncrementCacheMisses(CallerType caller) {
     if( is_monitor_ && caller == CallerType::kGet){
       cache_misses_.fetch_add(1, std::memory_order_relaxed);
@@ -149,6 +149,7 @@ class LEVELDB_EXPORT Cache {
   void CalculateCacheHitRatePerSecond() {
     uint64_t previous_hits = 0;
     uint64_t previous_misses = 0;
+    uint64_t previous_insert = 0;
 
     while (!stop_thread_) {
       std::unique_lock<std::mutex> lock(mtx_);
@@ -160,6 +161,7 @@ class LEVELDB_EXPORT Cache {
       uint64_t current_insert = cache_insert_.load(std::memory_order_relaxed);
       uint64_t hits = current_hits - previous_hits;
       uint64_t misses = current_misses - previous_misses;
+      uint64_t insert = current_insert - previous_insert;
       uint64_t total = hits + misses;
 
       double hit_rate = total > 0 ? static_cast<double>(hits) / total : 0.0;
@@ -167,12 +169,15 @@ class LEVELDB_EXPORT Cache {
       std::time_t nowTime = std::time(nullptr);
 
       std::cout << nowTime << "; Cache Hit Rate (Only Get): " << hit_rate * 100 
-      << "%; total_access: " << current_hits + current_misses 
-      <<"; total_insert: "<< current_insert 
-      << "; total_miss:" << current_misses << std::endl;
+      << "%; access/s: " << total 
+      << "; hit/s:" << hits
+      << "; miss/s:" << misses
+      << "; insert/s:" << insert
+       << std::endl;
 
       previous_hits = current_hits;
       previous_misses = current_misses;
+      previous_insert = current_insert;
     }
   }
 

@@ -289,7 +289,7 @@ void Version::AddFileToQueue(uint64_t file, uint64_t file_size,
   f->smallest = smallest;
   f->largest = largest;
   interState_files_.push_back(f);    
-  std::cout<<"now_queue_size:"<<interState_files_.size()<<std::endl;          
+  //std::cout<<"now_queue_size:"<<interState_files_.size()<<std::endl;          
 }
 
 void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg, 
