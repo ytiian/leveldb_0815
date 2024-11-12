@@ -147,6 +147,8 @@ static bool FLAGS_zipfian_key_distribution = 0;
 
 static int FLAGS_zipfian_init_num = 1000000; //int max value = 2147483647
 
+static int FLAGS_write_per_sec_num = 30000;
+
 static double FLAGS_zipfian_theta = 0.99;
 
 static struct zipf_gen_state zipf_state;
@@ -1316,6 +1318,8 @@ class Benchmark {
       // Special thread that keeps writing until other threads are done.
       RandomGenerator gen;
       KeyBuffer key;
+      auto start_time = std::chrono::steady_clock::now();
+      int get_count = 0;
       while (true) {
         {
           MutexLock l(&thread->shared->mu);
@@ -1325,13 +1329,31 @@ class Benchmark {
           }
         }
 
-        const int k = thread->rand.Uniform(FLAGS_num);
-        key.Set(k);
+        //const int k = thread->rand.Uniform(FLAGS_zipfian_init_num);
+        //key.Set(k);
+        if(FLAGS_zipfian_key_distribution){
+          const int v = mehcached_zipf_next(&zipf_state);
+          //std::cout << "zip key: " << v << std::endl;
+          key.Set(v);
+        }else{
+          const int k = thread->rand.Uniform(FLAGS_zipfian_init_num);
+          key.Set(k);          
+        }
         Status s =
             db_->Put(write_options_, key.slice(), gen.Generate(value_size_));
         if (!s.ok()) {
           std::fprintf(stderr, "put error: %s\n", s.ToString().c_str());
           std::exit(1);
+        }
+        get_count++;
+        if (get_count >= FLAGS_write_per_sec_num) {
+          auto end_time = std::chrono::steady_clock::now();
+          auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+          if (duration < 1000) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000 - duration));
+          }
+          start_time = std::chrono::steady_clock::now();
+          get_count = 0;
         }
       }
 
@@ -1515,6 +1537,8 @@ int main(int argc, char** argv) {
       FLAGS_zipfian_key_distribution = n;
     } else if (sscanf(argv[i], "--zipfian_init_num=%d%c", &n, &junk) == 1){
       FLAGS_zipfian_init_num = n;
+    } else if (sscanf(argv[i], "--write_per_sec_num=%d%c", &n, &junk) == 1){
+      FLAGS_write_per_sec_num = n;
     } else if (sscanf(argv[i], "--zipfian_theta=%lf%c", &d, &junk) == 1) {
       FLAGS_zipfian_theta = d;
     } else if (strncmp(argv[i], "--trace_dir=", 12) == 0) {
