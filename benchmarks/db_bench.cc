@@ -851,30 +851,30 @@ class Benchmark {
         LoadTrace(trace_name);
         method = &Benchmark::RunTrace;
       } else if (name == Slice("workloada")) {
-        std::string trace_name = FLAGS_trace + "/workloada.txt";
+        std::string trace_name = FLAGS_trace + "/workloada_r1_u9.txt";
         LoadTrace(trace_name);
         method = &Benchmark::RunTrace;
       } else if (name == Slice("workloadb")) {
-        std::string trace_name = FLAGS_trace + "/workloadb.txt";
+        std::string trace_name = FLAGS_trace + "/workloada_r3_u7.txt";
         LoadTrace(trace_name);
         method = &Benchmark::RunTrace;
       } else if (name == Slice("workloadc")) {
-        std::string trace_name = FLAGS_trace + "/workloadc.txt";
+        std::string trace_name = FLAGS_trace + "/workloada_r5_u5.txt";
         LoadTrace(trace_name);
         method = &Benchmark::RunTrace;
       } else if (name == Slice("workloadd")) {
-        std::string trace_name = FLAGS_trace + "/workloadd.txt";
+        std::string trace_name = FLAGS_trace + "/workloada_r7_u3.txt";
         LoadTrace(trace_name);
         method = &Benchmark::RunTrace;
       } else if (name == Slice("workloade")) {
-        std::string trace_name = FLAGS_trace + "/workloade.txt";
+        std::string trace_name = FLAGS_trace + "/workloada_r9_u1.txt";
         LoadTrace(trace_name);
         method = &Benchmark::RunTrace;
       } else if (name == Slice("workloadf")) {
-        std::string trace_name = FLAGS_trace + "/workloadf.txt";
+        std::string trace_name = FLAGS_trace + "/workload_readonly.txt";
         LoadTrace(trace_name);
         method = &Benchmark::RunTrace;
-      } else {
+      }else {
         if (!name.empty()) {  // No error message for empty name
           std::fprintf(stderr, "unknown benchmark '%s'\n",
                        name.ToString().c_str());

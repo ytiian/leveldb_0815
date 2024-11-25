@@ -1540,9 +1540,9 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   impl->mutex_.Lock();
   VersionEdit edit;
 
-  if(!impl->thpool){
+  /*if(!impl->thpool){
     impl->thpool = thpool_init(num_read_threads);
-  }
+  }*/
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);
