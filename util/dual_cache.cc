@@ -632,6 +632,7 @@ class ShardedDualCache : public Cache {
   port::Mutex id_mutex_;
   uint64_t last_id_;
   SkipListBase skiplist_table_;
+  int warm_level;
   Arena arena_ GUARDED_BY(mutex_);
 
 
@@ -663,7 +664,7 @@ class ShardedDualCache : public Cache {
       if(e != nullptr){
         const uint32_t hash = e->hash;
         Cache::Handle* result = reinterpret_cast<Cache::Handle*>(e);
-        //shard_[Shard(hash)].AddRef(result);//Íâ²¿¾ö¶¨ÊÇ·ñÒýÓÃ
+        //shard_[Shard(hash)].AddRef(result);//ï¿½â²¿ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½
         return result;
       }
       return nullptr;
@@ -723,6 +724,18 @@ class ShardedDualCache : public Cache {
       total += shard_[s].TotalCharge();
     }
     return total;
+  }
+  void SetWarmLevel(const int& level) override {
+    warm_level = level;
+  }
+  void EraseWarmLevel() override {
+    warm_level = 1000;
+  }
+  bool IfWarmLevel(const int& level) override {
+    if(warm_level == level){
+      return true;
+    }
+    return false;
   }
 };
 

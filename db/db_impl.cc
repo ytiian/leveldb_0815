@@ -965,6 +965,9 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     stop_thread_ = false;
     reminder_thread_ = std::thread(&DBImpl::ReminderRemoveThread, this);  
   }
+  int out_level = compact->compaction->level() + 1;
+  Cache* block_cache = options_.block_cache;
+  block_cache->SetWarmLevel(out_level);
   input->SeekToFirst();
   Status status;
   ParsedInternalKey ikey;
@@ -1127,6 +1130,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   Cache* block_cache = options_.block_cache;
   Iterator* cache_iter = block_cache->NewIterator(smallest, largest);
   cache_iter->CleanRepeat();*/
+  block_cache->EraseWarmLevel();
   if (!status.ok()) {
     RecordBackgroundError(status);
   }
@@ -1609,9 +1613,9 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   impl->mutex_.Lock();
   VersionEdit edit;
 
-  if(!impl->thpool){
+  /*if(!impl->thpool){
     impl->thpool = thpool_init(num_read_threads);
-  }
+  }*/
 
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;

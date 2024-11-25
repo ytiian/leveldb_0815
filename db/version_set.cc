@@ -263,7 +263,7 @@ static void SaveValue(void* arg, const Slice& ikey, const Slice& v) {
   }
 }
 
-std::condition_variable cv;                  // Ìõ¼þ±äÁ¿ÓÃÓÚÍ¬²½
+std::condition_variable cv;                  // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¬ï¿½ï¿½
 std::atomic<bool> stop;
 void Version::ThreadA_ReadUseIO(Slice user_key, Slice internal_key, void* arg, 
                         bool (*ReadUseIO)(void*, int, FileMetaData*),
@@ -381,33 +381,28 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
     }        
   }
 
-
-  stop = false;
-
   s->base_level = match_file ? 2 : 1;
 
-  for (int level = 1; level < config::kNumLevels; level++) {
-    s->status[level] = SEARCH_INIT;
+  for (int level = s->base_level; level < config::kNumLevels; level++) {
+    size_t num_files = files_[level].size();
+    if (num_files == 0) {
+      continue;
+    }
+    
+    uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);
+    if (index < num_files) {
+      FileMetaData* f = files_[level][index];
+      if (ucmp->Compare(user_key, f->smallest.user_key()) < 0) {
+        continue;
+      } else {
+        if (!(*ReadUseIO)(arg, level, f)) {
+            //std::cout<<"find io:" << level << std::endl;
+            return;
+        }          
+      }
+    }
   }
 
-  read_struct str;
-  str.val = CACHE_THRD;
-  for(int i = 0; i < 1; i++){
-    str.arg = arg;
-    str.ReadFromCache = ReadFromCache;
-    str.ReadUseIO = ReadUseIO;
-    str.user_key = user_key;
-    str.internal_key = internal_key;
-    str.ucmp = ucmp;
-    str.version = this;
-    thpool_add_work(thpool, read_thread, &str);
-  }
-
-  ThreadA_ReadUseIO(user_key, internal_key, arg, ReadUseIO, ucmp);
-
-  stop = true;
-
-  thpool_wait(thpool);
 }
 
 Status Version::GetWithReminder(const ReadOptions& options, const LookupKey& k, std::string* value, 

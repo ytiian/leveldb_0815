@@ -69,7 +69,7 @@ class LEVELDB_EXPORT Table {
   static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, const uint64_t& file_number, const bool& which, const int& level, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
 //[for Not L0 get]
-  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, void* saver, const int& level, const uint64_t& file_number, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
+  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&, void* saver, const Slice&, const int& level, const uint64_t& file_number, const CallerType& caller_type = CallerType::kCallerTypeUnknown);
 
 //[for L0 get]
   Iterator* BlockReader(void* arg, const ReadOptions& options, const Slice& index_value, const uint64_t& file_number, const bool& which, const CallerType& caller_type);

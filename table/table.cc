@@ -249,7 +249,9 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options, const Slice&
 
 //[for Not L0 get]
 Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
-                             const Slice& index_value, void* sv, const int& level, const uint64_t& file_number, const CallerType& caller_type) {
+                             const Slice& index_value, void* sv,
+                             const Slice& k,
+                             const int& level, const uint64_t& file_number, const CallerType& caller_type) {
   Saver* saver = reinterpret_cast<Saver*>(sv);
   Table* table = reinterpret_cast<Table*>(arg);
   Cache* block_cache = table->rep_->options.block_cache;
@@ -275,8 +277,20 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
         saver->status[level].store(SEARCH_FOUND_BLOCK, std::memory_order_seq_cst);
         block_cache -> IncrementCacheHits(caller_type);
       } else {
-        while(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_BEGIN_CACHE_SEARCH){}
-        if(saver->status[level].load(std::memory_order_seq_cst) == SEARCH_NEED_IO){
+        if(block_cache->IfWarmLevel(level)){
+          size_t key_len = k.size();
+          char cache_key_buffer[sizeof(uint32_t) + key_len];
+          EncodeFixed32(cache_key_buffer, level); 
+          memcpy(cache_key_buffer + sizeof(uint32_t), k.data(), key_len);
+          Slice new_key(cache_key_buffer, sizeof(cache_key_buffer));
+          cache_handle = block_cache->Lookup(new_key, true); // return LRUHandle*            
+        }
+        if(cache_handle != nullptr){
+          block_cache -> AddRef(cache_handle);
+          block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
+          assert(block != nullptr);
+          block_cache -> IncrementSkiplistHits(caller_type);
+        }else{
           s = ReadBlock(table->rep_->file, options, handle, &contents);
           block_cache -> IncrementCacheMisses(caller_type);
           if (s.ok()) {
@@ -287,12 +301,6 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
               block_cache -> IncrementCacheInsert(caller_type);
             }
           }
-        } else{
-          cache_handle = saver->cache_handle[level];
-          block_cache -> AddRef(cache_handle);
-          block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
-          assert(block != nullptr);
-          block_cache -> IncrementSkiplistHits(caller_type);
         }
       }
     }
@@ -395,10 +403,9 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
     BlockHandle handle;
     if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
         !filter->KeyMayMatch(handle.offset(), k)) {
-        saver->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
       // Not found
     } else {
-      Iterator* block_iter = BlockReader(this, options, iiter->value(), arg, level, file_number, CallerType::kGet);
+      Iterator* block_iter = BlockReader(this, options, iiter->value(), arg, k, level, file_number, CallerType::kGet);
       block_iter->Seek(k);
       if (block_iter->Valid()) {
         (*handle_result)(arg, block_iter->key(), block_iter->value());
@@ -406,9 +413,7 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
       s = block_iter->status();
       delete block_iter;
     }
-  } else{
-    saver->status[level].store(SEARCH_NOT_FOUND, std::memory_order_seq_cst);
-  }
+  } 
   if (s.ok()) {
     s = iiter->status();
   }

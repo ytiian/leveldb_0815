@@ -129,6 +129,12 @@ class LEVELDB_EXPORT Cache {
   // cache.
   virtual uint64_t TotalCharge() const = 0;
 
+  virtual void SetWarmLevel(const int& level){};
+
+  virtual void EraseWarmLevel(){};
+
+  virtual bool IfWarmLevel(const int& level){return false;};
+
   void IncrementCacheHits(CallerType caller) {
     if( is_monitor_ && caller == CallerType::kGet){
       cache_hits_.fetch_add(1, std::memory_order_relaxed);
@@ -148,7 +154,7 @@ class LEVELDB_EXPORT Cache {
     } 
   }
 
-  // µÝÔöcache_misses_
+  // ï¿½ï¿½ï¿½ï¿½cache_misses_
   void IncrementCacheMisses(CallerType caller) {
     if( is_monitor_ && caller == CallerType::kGet){
       cache_misses_.fetch_add(1, std::memory_order_relaxed);

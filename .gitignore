@@ -14,3 +14,4 @@ tmp.txt
 test_shell/
 ycsb_trace_test/
 ycsb_trace_4e7/
+readwhilewriting/
