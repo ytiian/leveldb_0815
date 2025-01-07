@@ -371,7 +371,7 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
       break;
     }
     FileMetaData* f = interState_files_[i];
-    if (ucmp->Compare(user_key, f->smallest.user_key()) < 0 && ucmp->Compare(user_key, f->largest.user_key()) > 0) { 
+    if (ucmp->Compare(user_key, f->smallest.user_key()) < 0 || ucmp->Compare(user_key, f->largest.user_key()) > 0) { 
         continue;
     }
     match_file = true;
